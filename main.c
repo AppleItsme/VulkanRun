@@ -17,23 +17,24 @@ inline void errCheck(bool condition, const char *msg, ...) {
 	}
 }
 
+#define DEBUG
+
 VkResult res;
 
 #ifdef DEBUG
 
-#define VALIDATION_LAYER_LENGTH 1
-
-const char *validationLayers[VALIDATION_LAYER_LENGTH] = {
+const char validationLayers[][VK_MAX_EXTENSION_NAME_SIZE] = {
 	"VK_LAYER_KHRONOS_validation"
 };
 
+#define VALIDATION_LAYER_LENGTH sizeof(validationLayers)/VK_MAX_EXTENSION_NAME_SIZE
+
 VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger) {
-    auto func = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
-    if (func != nullptr) {
+    PFN_vkCreateDebugUtilsMessengerEXT func = vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+    if (func != NULL) {
         return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
-    } else {
-        return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
+    return VK_ERROR_EXTENSION_NOT_PRESENT;
 }
 
 void validationLayerInit(VkInstanceCreateInfo *createInfo) {
@@ -136,7 +137,6 @@ int main() {
 	for(int i = EXTENSIONS_SIZE; i < createInfo.enabledExtensionCount; i++) {
 		strcpy(extensions[i], glfwExtensions[i]);
 	}
-
 	
 	#ifdef DEBUG
 	validationLayerInit(&createInfo);
@@ -179,6 +179,50 @@ int main() {
 	chosenPhysicalDevice = physicalDevices[gpuIndex];
 	free(physicalDevices);
 
+	uint32_t queueFamilyCount = 0;
+	vkGetPhysicalDeviceQueueFamilyProperties(chosenPhysicalDevice, &queueFamilyCount, NULL);
+	VkQueueFamilyProperties *queueFamilies = malloc(queueFamilyCount * sizeof(VkQueueFamilyProperties));
+	vkGetPhysicalDeviceQueueFamilyProperties(chosenPhysicalDevice, &queueFamilyCount, &queueFamilies);
+
+	uint32_t graphicsQueueIndex = -1;
+
+	for(int i = 0; i < queueFamilyCount; i++) {
+		if(queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+			graphicsQueueIndex = i;
+			break;
+		}
+	}
+	errCheck(graphicsQueueIndex == -1, "Could not find a graphics capable queue family!");
+	free(queueFamilies);
+
+	float queuePriority = 1;
+
+	VkDeviceQueueCreateInfo queueCreateInfo = {
+		.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+		.queueFamilyIndex = graphicsQueueIndex,
+		.queueCount = 1,
+		.pQueuePriorities = &queuePriority
+	};
+	VkDeviceCreateInfo deviceCreateInfo = {
+		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+		.pQueueCreateInfos = &queueCreateInfo,
+		.queueCreateInfoCount = 1,
+	};
+	#ifdef DEBUG
+	deviceCreateInfo.ppEnabledLayerNames = validationLayers;
+	deviceCreateInfo.enabledLayerCount = VALIDATION_LAYER_LENGTH;
+	#endif
+	vkGetPhysicalDeviceFeatures(chosenPhysicalDevice, deviceCreateInfo.pEnabledFeatures);
+
+	VkDevice device = {0};
+	res = vkCreateDevice(chosenPhysicalDevice, &deviceCreateInfo, NULL, &device);
+	errCheck(res != VK_SUCCESS, "Could not create device! (error code: %d)", res);
+	VkQueue graphiscQueue;
+	vkGetDeviceQueue(device, graphicsQueueIndex, 0, &graphiscQueue);
+
+	
+
+	vkDestroyDevice(device, NULL);
 	#ifdef DEBUG
 	vkDestroyDebugUtilsMessengerEXT(&instance, debugMessenger, NULL);
 	#endif
