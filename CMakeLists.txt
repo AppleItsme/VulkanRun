@@ -7,7 +7,6 @@ Project (
 	)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED TRUE)
-set(CMAKE_BUILD_TYPE Debug)
 set(BUILD_SHARED_LIBS OFF)
 
 
@@ -18,6 +17,7 @@ if(MSVC)
 endif()
 
 find_package(Vulkan REQUIRED)
+
 add_executable(${PROJECT_NAME} src/main.c)
 add_library(engine src/vk.c)
 
@@ -38,5 +38,4 @@ target_link_libraries(engine PRIVATE
 target_link_libraries(${PROJECT_NAME}
 	engine
 )
-
 add_compile_options(-Wall -Wextra -Wpedantic -Werror)

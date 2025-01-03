@@ -1,4 +1,5 @@
 #include "vk.h"
+
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
@@ -7,451 +8,483 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include <varargs.h>
-
 typedef struct engine_h {
+	size_t testNumber;
     VkDevice device;
     VkInstance instance;
     VkPhysicalDevice physicalDevice;
     GLFWwindow *window;
 
     VkSurfaceKHR surface;
-    VkQueue graphicsQueue, presentationQueue;
+    struct {
+		uint32_t graphics;
+		uint32_t presentation;
+		uint32_t compute;
+	} queue_indices;
+	struct {
+		VkQueue graphics;
+		VkQueue presentation;
+		VkQueue compute;
+	} queues;
     struct {
 		VkSurfaceCapabilitiesKHR capabilities;
-		VkSurfaceFormatKHR *format;
-		VkPresentModeKHR *presentMode;
-	} swapchainSupport;
-    uint32_t format, presentMode;
+		VkSurfaceFormatKHR format;
+		VkPresentModeKHR presentMode;
+	} swapchainDetails;
 	
-	VkSwapchainKHR swapchain;
+	VkSwapchainKHR swapchain, oldSwapchain;
 	VkImage *swapchainImages;
 	VkImageView *swapchainImageViews;
 	uint32_t swapchainImageCount;
+	VkExtent2D pixelResolution;
 
 	#ifndef NDEBUG
 	VkDebugUtilsMessengerEXT debugMessenger;
 	#endif
 } Engine;
 
-bool EngineWindowShouldClose(Engine *engine) {
-	return glfwWindowShouldClose(engine->window);
-}
-
-void EngineRenderingDone(Engine *engine) {
-	glfwPollEvents();
-	glfwSwapBuffers(engine->window);
-}
 
 inline uint32_t clampU32(uint32_t val, uint32_t min, uint32_t max) {
 	val = val < min ? min : val;
 	return val > max ? max : val;
 }
 
-#define ERROR_CHECK(condition, EngineFailcode, VulkanFailcode) \
-    if(condition) { \
-        return (EngineResult){EngineFailcode, VulkanFailcode}; \
-    } 
+#define ERR_CHECK(condition, engineCode, vulkanCode)\
+	if(!(condition)) \
+		return (EngineResult) {engineCode, vulkanCode}
+#define ENGINE_RESULT_SUCCESS (EngineResult) {SUCCESS, VK_SUCCESS}
 
-#define MALLOC(var_type, variable, size) \
-	var_type variable = malloc(size);\
-	if(variable == NULL) \
-		return (EngineResult) {OUT_OF_MEMORY, VK_SUCCESS};
+
+// const char *instanceExtensions[] = {
+// 	""
+// };
+// const size_t instanceExtensionsCount = sizeof(instanceExtensions)/sizeof(char*);
+
+const char *deviceExtensions[] = {
+	VK_KHR_SWAPCHAIN_EXTENSION_NAME
+};
+#define ARR_SIZE(arr) (sizeof(arr)/sizeof(arr[0]))
 
 #ifndef NDEBUG
 
-const char validationLayers[][VK_MAX_EXTENSION_NAME_SIZE] = {
-	"VK_LAYER_KHRONOS_validation"
-};
+const char *validationLayers[] = {"VK_LAYER_KHRONOS_validation"};
 
-#define VALIDATION_LAYER_LENGTH sizeof(validationLayers)/VK_MAX_EXTENSION_NAME_SIZE
+bool checkValidationSupport() {
+	uint32_t layerCount = 0;
+	vkEnumerateInstanceLayerProperties(&layerCount, NULL);
+	VkLayerProperties *layerProps = malloc(sizeof(VkLayerProperties) * layerCount);
+	vkEnumerateInstanceLayerProperties(&layerCount, layerProps);
+	
+	bool found = false;
 
-VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger) {
-    PFN_vkCreateDebugUtilsMessengerEXT func = vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
-    if (func != NULL) {
-        return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
-    }
-    return VK_ERROR_EXTENSION_NOT_PRESENT;
-}
-
-EngineResult validationLayerInit(VkInstanceCreateInfo *createInfo) {
-	uint32_t layerPropCount = 0;
-	vkEnumerateInstanceLayerProperties(&layerPropCount, NULL);
-	MALLOC(VkLayerProperties*, layerProp, sizeof(VkLayerProperties) * layerPropCount);
-
-	VkResult res = vkEnumerateInstanceLayerProperties(&layerPropCount, layerProp);
-	ERROR_CHECK(res != VK_SUCCESS, DEBUG_INFO_NOT_FOUND, res);
-
-	uint32_t validationLayersFound = 0;
-
-	for(int i = 0; i < layerPropCount; i++) {
-		for(int j = 0; j < VALIDATION_LAYER_LENGTH; j++)
-		if(!strcmp(layerProp[i].layerName, validationLayers[j])) {
-			validationLayersFound++;
-			if(validationLayersFound == VALIDATION_LAYER_LENGTH)
-				break;
+	for(int i = 0; i < layerCount; i++) {
+		if(strcmp(layerProps[i].layerName, validationLayers[0])) {
+			found = true;
+			break;
 		}
 	}
-	ERROR_CHECK(validationLayersFound < VALIDATION_LAYER_LENGTH, DEBUG_INFO_NOT_FOUND, VK_SUCCESS);
-	createInfo->enabledLayerCount = VALIDATION_LAYER_LENGTH;
-	createInfo->ppEnabledLayerNames = validationLayers;
-	free(layerProp);
-	return (EngineResult) {SUCCESS, VK_SUCCESS};
-}
-
-VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-    VkDebugUtilsMessageTypeFlagsEXT messageType,
-    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-    void* pUserData) {
-
-	if(messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
-    fprintf(stderr, "validation layer: %s\n", pCallbackData->pMessage);
-
-    return VK_FALSE;
-}
-
-void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator) {
-    PFN_vkDestroyDebugUtilsMessengerEXT func = vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
-    if (func != NULL) {
-        func(instance, debugMessenger, pAllocator);
-    }
-}
-
-EngineResult setupDebugMessenger(VkDebugUtilsMessengerEXT *debugMessenger, VkInstance *instance) {
-	VkDebugUtilsMessengerCreateInfoEXT createInfo = {0};
-	createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-	createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-	createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-	createInfo.pfnUserCallback = debugCallback;
-	VkResult res = CreateDebugUtilsMessengerEXT(instance, &createInfo, NULL, debugMessenger);
-	ERROR_CHECK(res != VK_SUCCESS, DEBUG_CREATION_FAILED, res);
-	return (EngineResult) {SUCCESS, VK_SUCCESS};
+	free(layerProps);
+	return found;
 }
 
 #endif
 
-const char desiredInstanceExtensions[][VK_MAX_EXTENSION_NAME_SIZE] = {
-	#ifndef NDEBUG
-	VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
-	#endif
-	VK_KHR_SURFACE_EXTENSION_NAME,
-	
-};
+VkResult res;
 
-const char desiredDeviceExtensions[][VK_MAX_EXTENSION_NAME_SIZE] = {
-	VK_KHR_SWAPCHAIN_EXTENSION_NAME
-};
+EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t deviceCount, Engine *engine) {
+	size_t queueMemSize = 0,
+			extensionsMemSize = 0,
+			formatMemSize = 0,
+			presentMemSize = 0;
+	VkQueueFamilyProperties *queueProps = NULL;
+	VkExtensionProperties *extensionProps = NULL;
+	VkSurfaceFormatKHR *formats = NULL;
+	VkPresentModeKHR *presentMode = NULL;
+	bool suitableDeviceFound = false;
 
-char* readFile(char *path) {
-	FILE *file = fopen(path, "r");
-	fseek(file, 0, SEEK_END);
-	size_t len = ftell(file);
-	fseek(file, 0, SEEK_SET);
+	for(int i = 0; i < deviceCount; i++) {
+		VkPhysicalDeviceProperties props = {0};
+		vkGetPhysicalDeviceProperties(devices[i], &props);
+		printf("Device Name: %s\n", props.deviceName);
 
-	char *txt = malloc(len); 
-	fread(file, sizeof(char), len, file);
-	fclose(file);
-	return txt;
-}
-
-#define desiredDeviceExtensionsCount sizeof(desiredDeviceExtensions)/VK_MAX_EXTENSION_NAME_SIZE
-#define desiredInstanceExtensionsCount  sizeof(desiredInstanceExtensions)/VK_MAX_EXTENSION_NAME_SIZE
-
-EngineResult engine_init(Engine *engine, EngineCI engineCI) {
-    VkResult res;
-	ERROR_CHECK(!glfwInit(), GLFW_CANNOT_INIT, VK_SUCCESS);
-
-	VkApplicationInfo appInfo = {
-		.apiVersion = VK_API_VERSION_1_3,
-		.applicationVersion = engineCI.appVersion,
-		.engineVersion = VK_MAKE_VERSION(0,0,1),
-		.pApplicationName = engineCI.appName,
-		.pEngineName = "vulkanik",
-		.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO
-	};
-	VkInstanceCreateInfo createInfo = {0};
-	createInfo.enabledLayerCount = 0;
-	createInfo.flags = 0;
-	createInfo.pApplicationInfo = &appInfo;
-	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-	
-	const char **glfwExtensions = glfwGetRequiredInstanceExtensions(&createInfo.enabledExtensionCount);
-
-	createInfo.enabledExtensionCount += desiredInstanceExtensionsCount;
-	MALLOC(char**, extensions, ((createInfo.enabledExtensionCount) * VK_MAX_EXTENSION_NAME_SIZE));
-	for(int i = 0; i < desiredInstanceExtensionsCount; i++) {
-		strcpy(extensions[createInfo.enabledExtensionCount+i], desiredInstanceExtensions[i]);
-	}
-	for(int i = desiredInstanceExtensionsCount; i < createInfo.enabledExtensionCount; i++) {
-		strcpy(extensions[i], glfwExtensions[i]);
-	}
-	
-	#ifndef NDEBUG
-	EngineResult debug_res = validationLayerInit(&createInfo);
-	if(debug_res.EngineCode != SUCCESS)
-		return debug_res;
-	#endif
-
-	MALLOC(,engine, sizeof(Engine));
-	res = vkCreateInstance(&createInfo, NULL, &engine->instance);
-	free(extensions);
-	ERROR_CHECK(res != VK_SUCCESS, INSTANCE_CREATION, res);
-	#ifndef NDEBUG
-	debug_res = setupDebugMessenger(&engine->debugMessenger, &engine->instance);
-	if(debug_res.EngineCode != SUCCESS)
-		return debug_res;
-	#endif
-
-	engine->window = glfwCreateWindow(engineCI.width, engineCI.height, engineCI.displayName, NULL, NULL);
-	ERROR_CHECK(!engine->window, WINDOW_CREATION, VK_SUCCESS);
-    res = glfwCreateWindowSurface(engine->instance, engine->window, NULL, &engine->surface) != VK_SUCCESS;
-	ERROR_CHECK(res != VK_SUCCESS, WINDOW_CREATION, res);
-
-	uint32_t physicalDeviceCount = 0;
-	vkEnumeratePhysicalDevices(&engine->instance, &physicalDeviceCount, NULL);
-	MALLOC(VkPhysicalDevice*, physicalDevices, sizeof(VkPhysicalDevice) * physicalDeviceCount);
-	vkEnumeratePhysicalDevices(&engine->instance, &physicalDeviceCount, physicalDevices);
-
-	uint32_t gpuIndex = -1;
-
-	for(int i = 0; i < physicalDeviceCount; i++) {
-		VkPhysicalDeviceProperties prop = {0};
-		vkGetPhysicalDeviceProperties(physicalDevices[i], &prop);
-		switch(prop.deviceType) {
-		case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: 
-			goto FOUND_DISCRETE;
-		case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
-			gpuIndex = i;
-		default:
+		size_t graphicsI = -1, presentationI = -1, computeI = -1;
+		//First checking for queue capabilities; if they are not sufficient then the rest doesnt even matter
+		size_t queuePropCount = 0;
+		vkGetPhysicalDeviceQueueFamilyProperties(devices[i], &queuePropCount, NULL);
+		if(queuePropCount == 0)
+			continue;
+		if(queuePropCount > queueMemSize) {
+			if(queueProps == NULL) {
+				queueProps = malloc(sizeof(VkQueueFamilyProperties) * queuePropCount);
+			} else {
+				queueProps = realloc(queueProps, sizeof(VkQueueFamilyProperties) * queuePropCount);
+			}
+			queueMemSize = queuePropCount;
+		}
+		vkGetPhysicalDeviceQueueFamilyProperties(devices[i], &queuePropCount, queueProps);
+		for(int j = 0; j < queuePropCount; j++) {
+			if(queueProps[j].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+				graphicsI = j;
+			}
+			if(queueProps[j].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+				computeI = j;
+			}
+			VkBool32 presentSupport = false;
+			vkGetPhysicalDeviceSurfaceSupportKHR(devices[i], j, engine->surface, &presentSupport);
+			if(presentSupport) {
+				presentationI = j;
+			}
+			if(graphicsI > -1 && presentationI > -1 && computeI > -1)
+				break;
+		}
+		if(graphicsI == -1 || presentationI == -1 || computeI == -1) {
 			continue;
 		}
-	}
-	ERROR_CHECK(gpuIndex == -1, GPU_NOT_FOUND, VK_SUCCESS);
-	FOUND_DISCRETE:
-	engine->physicalDevice = physicalDevices[gpuIndex];
-	free(physicalDevices);
 
-	uint32_t queueFamilyCount = 0;
-	vkGetPhysicalDeviceQueueFamilyProperties(engine->physicalDevice, &queueFamilyCount, NULL);
-	MALLOC(VkQueueFamilyProperties*, queueFamilies, queueFamilyCount * sizeof(VkQueueFamilyProperties));
-	vkGetPhysicalDeviceQueueFamilyProperties(engine->physicalDevice, &queueFamilyCount, &queueFamilies);
-
-	struct {
-		int32_t graphics;
-		int32_t presentation;
-	} queueIndices = {-1, -1};
-
-	for(int i = 0; i < queueFamilyCount; i++) {
-		if(queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-			queueIndices.graphics = i;
+		uint32_t extensionCount = 0;
+		vkEnumerateDeviceExtensionProperties(devices[i], NULL, &extensionCount, NULL);
+		if(extensionCount == 0)
+			continue;
+		if(extensionCount > extensionsMemSize) {
+			if(extensionProps == NULL) {
+				extensionProps = malloc(sizeof(VkExtensionProperties) * extensionCount);
+			} else {
+				extensionProps = realloc(extensionProps, sizeof(VkExtensionProperties) * extensionCount);
+			}
+			extensionsMemSize = extensionCount;
 		}
-		VkBool32 surfaceSupported;
-		res = vkGetPhysicalDeviceSurfaceSupportKHR(engine->physicalDevice, i, engine->surface, &surfaceSupported);
-		if(surfaceSupported) {
-			queueIndices.presentation = i;
+		vkEnumerateDeviceExtensionProperties(devices[i], NULL, &extensionCount, extensionProps);
+
+		size_t found = 0;
+		for(int j = 0; j < extensionCount; j++) {
+			for(int k = 0; k < ARR_SIZE(deviceExtensions); k++) {
+				if(strcmp(deviceExtensions[k], extensionProps[j].extensionName)) {
+					found++;
+					break;
+				}
+			}
 		}
-		if(queueIndices.graphics >= 0 && queueIndices.presentation >= 0) {
-			break;
+		
+		if(found < ARR_SIZE(deviceExtensions)) {
+			continue;
 		}
-	}
-	ERROR_CHECK(queueIndices.graphics == -1, INAPPROPRIATE_GPU, VK_SUCCESS);
-	free(queueFamilies);
+		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(devices[i], engine->surface, &engine->swapchainDetails.capabilities);
 
-	float queuePriority = 1;
+		VkPhysicalDeviceVulkan12Features desiredFeatures12 = {
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+			.pNext = NULL
+		};
+		VkPhysicalDeviceVulkan13Features desiredFeatures13 = {
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+			.pNext = &desiredFeatures12
+		};
+		VkPhysicalDeviceFeatures2 deviceFeatures = {
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+			.pNext = &desiredFeatures13
+		};
+		vkGetPhysicalDeviceFeatures2(devices[i], &deviceFeatures);
 
-	VkDeviceQueueCreateInfo queueCreateInfo[] = {
-		{
-			.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-			.queueFamilyIndex = queueIndices.graphics,
-			.queueCount = 1,
-			.pQueuePriorities = &queuePriority
-		},
-		{
-			.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-			.queueFamilyIndex = queueIndices.presentation,
-			.queueCount = 1,
-			.pQueuePriorities = &queuePriority
+		size_t formatCount = 0;
+		vkGetPhysicalDeviceSurfaceFormatsKHR(devices[i], engine->surface, &formatCount, NULL);
+		if(formatCount == 0)
+			continue;
+		if(formatCount > formatMemSize) {
+			if(formats == NULL) {
+				formats = malloc(sizeof(VkSurfaceFormatKHR) * formatCount);
+			} else {
+				formats = realloc(formats, sizeof(VkSurfaceFormatKHR) * formatCount);
+			}
+			formatMemSize = formatCount;
 		}
-	};
+		vkGetPhysicalDeviceSurfaceFormatsKHR(devices[i], engine->surface, &formatCount, formats);
+		int32_t formatIndex = -1;
+		for(int i = 0; i < formatCount; i++) {
+			if(formats[i].format == VK_FORMAT_B8G8R8A8_SRGB && formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+				formatIndex = i;
+				break;
+			}
+		}
+		if(formatIndex == -1)
+			continue;
 
-	uint32_t deviceExtensionCount = 0;
-	vkEnumerateDeviceExtensionProperties(engine->physicalDevice, NULL, &deviceExtensionCount, NULL);
-	MALLOC(VkExtensionProperties*, deviceExtensions, sizeof(VkExtensionProperties) * deviceExtensionCount);
-	vkEnumerateDeviceExtensionProperties(engine->physicalDevice, NULL, &deviceExtensionCount, &desiredDeviceExtensions);
 
-	uint32_t desiredExtensionsFound = 0;
-	for(int i = 0; i < deviceExtensionCount; i++) {
-		for(int j = 0; j < desiredDeviceExtensionsCount; j++) {
-			if(!strcmp(deviceExtensions[i].extensionName, desiredDeviceExtensions[j])) {
-				desiredExtensionsFound++;
+		uint32_t presentModeCount = 0;
+		vkGetPhysicalDeviceSurfacePresentModesKHR(devices[i], engine->surface, &presentModeCount, NULL);
+		if(presentModeCount == 0)
+			continue;
+		if(presentModeCount > presentMemSize) {
+			if(presentMode == NULL) {
+				presentMode = malloc(sizeof(VkPresentModeKHR) * presentModeCount);
+			} else {
+				presentMode = realloc(presentMode, sizeof(VkPresentModeKHR) * presentModeCount);
+			}
+			presentMemSize = presentModeCount;
+		}
+		vkGetPhysicalDeviceSurfacePresentModesKHR(devices[i], engine->surface, &presentModeCount, presentMode);
+		VkPresentModeKHR bestPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+		for(int i = 0; i < presentModeCount; i++) {
+			if(presentMode[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
+				bestPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+				break;
+			}
+		}
+		if(desiredFeatures13.dynamicRendering && 
+			desiredFeatures13.synchronization2 &&
+			desiredFeatures12.bufferDeviceAddress &&
+			desiredFeatures12.descriptorIndexing) {
+			engine->physicalDevice = devices[i];
+			engine->queue_indices.graphics = graphicsI;
+			engine->queue_indices.compute = computeI;
+			engine->queue_indices.presentation = presentationI;
+			engine->swapchainDetails.format = formats[formatIndex];
+			engine->swapchainDetails.presentMode = bestPresentMode;
+			suitableDeviceFound = true;
+			if(props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+				break;
 			}
 		}
 	}
-	ERROR_CHECK(desiredExtensionsFound < desiredDeviceExtensionsCount, INSUFFICIENT_VULKAN, VK_SUCCESS);
-	free(deviceExtensions);
-	#ifdef DEBUG
-	deviceCreateInfo.ppEnabledLayerNames = validationLayers;
-	deviceCreateInfo.enabledLayerCount = VALIDATION_LAYER_LENGTH;
-	#endif
+	VkPhysicalDeviceProperties props;
+	vkGetPhysicalDeviceProperties(engine->physicalDevice, &props);
+	printf("\x1b[1;37mThe chosen device: %s\n\x1b[0m", props.deviceName);
+	free(queueProps);
+	free(extensionProps);
+	free(presentMode);
+	free(formats);
+	ERR_CHECK(suitableDeviceFound, INAPPROPRIATE_GPU, VK_SUCCESS);
+	return ENGINE_RESULT_SUCCESS;
+}
 
-	VkDeviceCreateInfo deviceCreateInfo = {
-		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-		.enabledExtensionCount = desiredDeviceExtensionsCount,
-		.ppEnabledExtensionNames = desiredDeviceExtensions,
-		.pQueueCreateInfos = queueCreateInfo,
-		.queueCreateInfoCount = sizeof(queueCreateInfo)/sizeof(VkDeviceQueueCreateInfo),
-	};
-	vkGetPhysicalDeviceFeatures(engine->physicalDevice, deviceCreateInfo.pEnabledFeatures);
-
-	res = vkCreateDevice(engine->physicalDevice, &deviceCreateInfo, NULL, &engine->device);
-	ERROR_CHECK(res != VK_SUCCESS, DEVICE_CREATION_FAILED, res);
-	VkQueue graphiscQueue;
-	vkGetDeviceQueue(engine->device, queueIndices.graphics, 0, &graphiscQueue);
-	
-	VkQueue presentationQueue;
-	vkGetDeviceQueue(engine->device, queueIndices.presentation, 0, &presentationQueue);
-	
-	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(engine->physicalDevice, engine->surface, &engine->swapchainSupport.capabilities);
-	
-	uint32_t formatCount = 0;
-	vkGetPhysicalDeviceSurfaceFormatsKHR(engine->physicalDevice, engine->surface, &formatCount, NULL);
-	MALLOC(,engine->swapchainSupport.format, sizeof(VkSurfaceFormatKHR) * formatCount);
-	vkGetPhysicalDeviceSurfaceFormatsKHR(engine->physicalDevice, engine->surface, &formatCount, &engine->swapchainSupport.format);
-
-	uint32_t presentCount = 0;
-	vkGetPhysicalDeviceSurfacePresentModesKHR(engine->physicalDevice, engine->surface, &presentCount, NULL);
-	MALLOC(,engine->swapchainSupport.presentMode, sizeof(VkSurfaceFormatKHR) * presentCount);
-	vkGetPhysicalDeviceSurfacePresentModesKHR(engine->physicalDevice, engine->surface, &presentCount, NULL);
-
-	uint32_t preferredFormat = 0;
-	for(; preferredFormat < formatCount; preferredFormat++) {
-		if(engine->swapchainSupport.format[preferredFormat].format == VK_FORMAT_B8G8R8_SRGB && 
-			engine->swapchainSupport.format[preferredFormat].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-				break;
-		}
-	}
-	if(preferredFormat >= formatCount)
-		preferredFormat = 0;
-
-	uint32_t preferredPresentMode = 0;
-	for(uint32_t i = 0; i < presentCount; i++) {
-		switch(engine->swapchainSupport.presentMode[i]) {
-		case VK_PRESENT_MODE_MAILBOX_KHR:
-			preferredPresentMode = i;
-			goto FOUND_BEST_PRESENT_MODE;
-		case VK_PRESENT_MODE_FIFO_KHR:
-			preferredPresentMode = i;
-		}
-	}
-	FOUND_BEST_PRESENT_MODE:
-
-	if(engine->swapchainSupport.capabilities.currentExtent.width != UINT32_MAX) {
-		goto CURRENT_EXTENT_SELECTED;
-	}
+EngineResult EngineSwapchainCreate(Engine *engine) {
 	VkExtent2D actualExtent = {0};
 	glfwGetFramebufferSize(engine->window, &actualExtent.width, &actualExtent.height);
-	actualExtent.width = clampU32(actualExtent.width, engine->swapchainSupport.capabilities.minImageExtent.width, 
-													  engine->swapchainSupport.capabilities.maxImageExtent.width);
-	actualExtent.height = clampU32(actualExtent.height, engine->swapchainSupport.capabilities.minImageExtent.height, 
-													engine->swapchainSupport.capabilities.maxImageExtent.height);
+	engine->pixelResolution.width = clampU32(actualExtent.width, engine->swapchainDetails.capabilities.minImageExtent.width, 
+													engine->swapchainDetails.capabilities.maxImageExtent.width);
+	engine->pixelResolution.height = clampU32(actualExtent.height, engine->swapchainDetails.capabilities.minImageExtent.height, 
+													engine->swapchainDetails.capabilities.maxImageExtent.height);
 
-	CURRENT_EXTENT_SELECTED:
-	uint32_t imageCount = engine->swapchainSupport.capabilities.minImageCount + 1;
-	if(engine->swapchainSupport.capabilities.maxImageCount > 0 && imageCount > engine->swapchainSupport.capabilities.maxImageCount)
-		imageCount = engine->swapchainSupport.capabilities.maxImageCount;
-	VkSwapchainCreateInfoKHR swapchainCreateInfo = {
+	uint32_t imageCount = engine->swapchainDetails.capabilities.minImageCount + 1;
+	if(engine->swapchainDetails.capabilities.maxImageCount > 0) {
+		imageCount = clampU32(imageCount, imageCount, engine->swapchainDetails.capabilities.maxImageCount);
+	}
+	VkSwapchainCreateInfoKHR swapchainCI = {
 		.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
 		.surface = engine->surface,
-		.minImageCount = imageCount,
-		.imageFormat = engine->swapchainSupport.format[preferredFormat].format,
-		.imageColorSpace = engine->swapchainSupport.format[preferredFormat].colorSpace,
-		.presentMode = engine->swapchainSupport.presentMode[preferredPresentMode],
-		.imageExtent = actualExtent,
+		.imageFormat = engine->swapchainDetails.format.format,
+		.imageColorSpace = engine->swapchainDetails.format.colorSpace,
+		.presentMode = engine->swapchainDetails.presentMode,
+		.imageExtent = engine->pixelResolution,
 		.imageArrayLayers = 1,
-		.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-		.preTransform = engine->swapchainSupport.capabilities.currentTransform,
+		.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, //IF YOU WANNA RENDER TO ANOTHER IMAGE FIRST, PUT VK_IMAGE_USAGE_TRANSFER_ATTACHMENT_BIT
+		.preTransform = engine->swapchainDetails.capabilities.currentTransform,
 		.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-		.clipped = VK_TRUE, //VULKAN IGNORES THE PIXELS THAT ARE HIDDEN BY OTHER THINGS
-		.oldSwapchain = VK_NULL_HANDLE
+		.clipped = VK_TRUE,
+		.oldSwapchain = engine->oldSwapchain,
+		.minImageCount = imageCount
 	};
 	
-	uint32_t _queueIndicesArr[] = {queueIndices.graphics, queueIndices.presentation};
-	if (queueIndices.graphics != queueIndices.presentation) {
-		swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-		swapchainCreateInfo.queueFamilyIndexCount = 2;
-		swapchainCreateInfo.pQueueFamilyIndices = _queueIndicesArr;
+	//MIGHT change it to compute instead of graphics
+	uint32_t queueFamilyIndices[2] = {engine->queue_indices.graphics, engine->queue_indices.presentation};
+	if(engine->queue_indices.graphics == engine->queue_indices.presentation) {
+		swapchainCI.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+		swapchainCI.queueFamilyIndexCount = 2;
+		swapchainCI.pQueueFamilyIndices = &queueFamilyIndices;
 	} else {
-		swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		swapchainCreateInfo.queueFamilyIndexCount = 0; // Optional
-		swapchainCreateInfo.pQueueFamilyIndices = NULL; // Optional
+		swapchainCI.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	}
 
-	res = vkCreateSwapchainKHR(engine->device, &swapchainCreateInfo, NULL, &engine->swapchain);
-	ERROR_CHECK(res != VK_SUCCESS, SWAPCHAIN_FAILED, res);
+	res = vkCreateSwapchainKHR(engine->device, &swapchainCI, NULL, &engine->swapchain);
+	ERR_CHECK(res == VK_SUCCESS, SWAPCHAIN_FAILED, res);
 
 	vkGetSwapchainImagesKHR(engine->device, engine->swapchain, &engine->swapchainImageCount, NULL);
-	MALLOC(,engine->swapchainImages, sizeof(VkImage) * engine->swapchainImageCount);
-	vkGetSwapchainImagesKHR(engine->device, engine->swapchain, &engine->swapchainImageCount, &engine->swapchainImages);
+	engine->swapchainImages = malloc(sizeof(VkImage) * engine->swapchainImageCount);
+	vkGetSwapchainImagesKHR(engine->device, engine->swapchain, &engine->swapchainImageCount, engine->swapchainImages);
 
-	
-	MALLOC(VkImageView*, swapchainImageViews, engine->swapchainImageCount * sizeof(VkImageView));
-
+	engine->swapchainImageViews = malloc(sizeof(VkImageView) * engine->swapchainImageCount);
 	for(int i = 0; i < engine->swapchainImageCount; i++) {
 		VkImageViewCreateInfo imageViewCI = {
 			.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
 			.image = engine->swapchainImages[i],
 			.viewType = VK_IMAGE_VIEW_TYPE_2D,
-			.format = engine->swapchainSupport.format[preferredFormat].format,
-			.components = {
-				.r = VK_COMPONENT_SWIZZLE_IDENTITY,
-				.g = VK_COMPONENT_SWIZZLE_IDENTITY,
-				.b = VK_COMPONENT_SWIZZLE_IDENTITY,
-				.a = VK_COMPONENT_SWIZZLE_IDENTITY
-			},
+			.format = engine->swapchainDetails.format.format,
+			.components = {VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY},
 			.subresourceRange = {
 				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
 				.baseMipLevel = 0,
 				.levelCount = 1,
 				.baseArrayLayer = 0,
-				.layerCount = 1 
-			}
+				.layerCount = 1
+			},
 		};
-        res = vkCreateImageView(engine->device, &imageViewCI, NULL, engine->swapchainImageViews[i]);
-		ERROR_CHECK(res != VK_SUCCESS, IMAGE_VIEW_FAILED, res);
+		vkCreateImageView(engine->device, &imageViewCI, NULL, &engine->swapchainImageViews[i]);
 	}
-
-    //return (EngineResult) {SUCCESS, VK_SUCCESS}; (MEANT TO BE HERE)
-    return (EngineResult) {SUCCESS, VK_SUCCESS};
+	return ENGINE_RESULT_SUCCESS;
 }
 
-
-void createShader(Engine *engine) {
-	char *vert_shader = readFile("shaders/vert.spv");
-	char *frag_shader = readFile("shaders/frag.spv");
-
-	/*VkShaderModuleCreateInfo shaderModuleCI = {
-		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-		.codeSize = strlen(vert_shader),
-		.
-	};*/
-
-	free(vert_shader);
-	free(frag_shader);
-}
-
-void engine_destroy(Engine *engine) {
-    for(int i = 0; i < engine->swapchainImageCount; i++) {
+void EngineSwapchainDestroy(Engine *engine) {
+	for(int i = 0; i < engine->swapchainImageCount; i++) {
 		vkDestroyImageView(engine->device, engine->swapchainImageViews[i], NULL);
 	}
 	free(engine->swapchainImages);
+	free(engine->swapchainImageViews);
 	vkDestroySwapchainKHR(engine->device, engine->swapchain, NULL);
-	vkDestroyDevice(engine->device, NULL);
-	#ifdef DEBUG
-	vkDestroyDebugUtilsMessengerEXT(&engine->instance, engine->debugMessenger, NULL);
+}
+
+EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI) {
+	Engine *engine = malloc(sizeof(Engine));
+	engine->oldSwapchain = VK_NULL_HANDLE;
+	size_t glfwExtensionsCount = 0;
+	ERR_CHECK(glfwInit() == GLFW_TRUE, GLFW_CANNOT_INIT, VK_SUCCESS);
+	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+	engine->window = glfwCreateWindow(engineCI.width, engineCI.height, engineCI.displayName, NULL, NULL);
+
+	#ifndef NDEBUG
+	ERR_CHECK(checkValidationSupport(), DEBUG_CREATION_FAILED, VK_SUCCESS);
 	#endif
+
+	const char **glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionsCount);
+	printf("===GLFW EXTENSIONS===\n");
+	for(int i = 0; i < glfwExtensionsCount; i++) {
+		printf("%s\n", glfwExtensions[i]);
+	}
+
+	VkApplicationInfo appInfo = {
+		.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+		.apiVersion = VK_API_VERSION_1_3,
+		.applicationVersion = engineCI.appVersion,
+		.pApplicationName = engineCI.appName,
+		.engineVersion = VK_MAKE_VERSION(1,0,0),
+		.pEngineName = "vulkanik",
+	};
+
+	VkInstanceCreateInfo instanceCI = {
+		.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+		.pApplicationInfo = &appInfo,
+		.enabledExtensionCount = glfwExtensionsCount,
+		.ppEnabledExtensionNames = glfwExtensions,
+		#ifndef NDEBUG
+		.enabledLayerCount = 1,
+		.ppEnabledLayerNames = validationLayers,
+		#else
+		.enabledLayerCount = 0,
+		.ppEnabledLayerNames = NULL,
+		#endif
+		.pNext = NULL,
+		.flags = 0
+	};
+	ERR_CHECK(engine != NULL, OUT_OF_MEMORY, VK_SUCCESS);
+	engine->instance = VK_NULL_HANDLE;
+	res = vkCreateInstance(&instanceCI, NULL, &engine->instance);
+	ERR_CHECK(res == VK_SUCCESS, INSTANCE_CREATION_FAILED, res);
+	printf("Vulkan Instance created successfully\n");
+
+	res = glfwCreateWindowSurface(engine->instance, engine->window, NULL, &engine->surface);
+	ERR_CHECK(res == VK_SUCCESS, WINDOW_CREATION_FAILED, res);
+
+
+	engine->physicalDevice = VK_NULL_HANDLE;
+	size_t physicalDeviceCount = 0;
+	vkEnumeratePhysicalDevices(engine->instance, &physicalDeviceCount, NULL);
+	printf("Physical Devices Found: %d\n", physicalDeviceCount);
+	ERR_CHECK(physicalDeviceCount > 0, GPU_NOT_FOUND, VK_SUCCESS);
+	VkPhysicalDevice *physicalDevices = malloc(physicalDeviceCount * sizeof(VkPhysicalDevice));
+	vkEnumeratePhysicalDevices(engine->instance, &physicalDeviceCount, physicalDevices);
+	
+	printf("picking physical device\n");
+	EngineResult eRes = findSuitablePhysicalDevice(physicalDevices, physicalDeviceCount, engine);
+	ERR_CHECK(eRes.EngineCode == SUCCESS, eRes.EngineCode, eRes.VulkanCode);
+	printf("Physical Device Chosen\n");
+	free(physicalDevices);
+
+	engine->swapchainImageCount = engine->swapchainDetails.capabilities.minImageCount + 1;
+
+	float queuePriority = 1;
+	uint32_t *queueI = (void*)(&engine->queue_indices);
+	size_t queueCI_len = 1;
+
+	#define QUEUECOUNT sizeof(engine->queue_indices)/sizeof(uint32_t)
+	uint32_t uniqueQueueI[QUEUECOUNT] = {queueI[0]};
+
+	VkDeviceQueueCreateInfo queueCI[QUEUECOUNT] = {
+		{
+			.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+			.pNext = NULL,
+			.pQueuePriorities = &queuePriority,
+			.queueCount = 1,
+			.queueFamilyIndex = queueI[0]
+		}
+	};
+	for(int i = 1; i < QUEUECOUNT; i++) { //yes i'm looping it like an array, tho i prefer to keep it in class as struct
+		bool isUnique = true;
+		for(int j = 0; j < queueCI_len; j++) {
+			if(uniqueQueueI[j] == queueI[i]) {
+				isUnique = false;
+				break;
+			}	
+		}
+		if(!isUnique) {
+			continue;
+		}
+		queueCI[queueCI_len] = (VkDeviceQueueCreateInfo) {
+			.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+			.pNext = NULL,
+			.pQueuePriorities = &queuePriority,
+			.queueCount = 1,
+			.queueFamilyIndex = queueI[i]
+		};
+		uniqueQueueI[queueCI_len] = queueI[i];
+		queueCI_len++; 
+	}
+
+	VkPhysicalDeviceVulkan12Features desiredFeatures12 = {
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+		.pNext = NULL,
+		.bufferDeviceAddress = true,
+		.descriptorIndexing = true
+	};
+	VkPhysicalDeviceVulkan13Features desiredFeatures13 = {
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+		.dynamicRendering = true,
+		.synchronization2 = true,
+		.pNext = &desiredFeatures12
+	};
+	VkPhysicalDeviceFeatures2 deviceFeatures = {
+		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+		.pNext = &desiredFeatures13,
+		.features = {0}
+	};
+	VkDeviceCreateInfo deviceCI = {
+		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+		.enabledExtensionCount = ARR_SIZE(deviceExtensions),
+		.ppEnabledExtensionNames = deviceExtensions,
+		.queueCreateInfoCount = queueCI_len,
+		.pQueueCreateInfos = queueCI,
+		.pEnabledFeatures = NULL,
+		.pNext = &deviceFeatures,
+		#ifndef NDEBUG
+		.enabledLayerCount = 1,
+		.ppEnabledLayerNames = validationLayers
+		#else
+		.enabledLayerCount = 0,
+		#endif
+	};
+
+	res = vkCreateDevice(engine->physicalDevice, &deviceCI, NULL, &engine->device);
+	ERR_CHECK(res == VK_SUCCESS, DEVICE_CREATION_FAILED, res);
+	vkGetDeviceQueue(engine->device, engine->queue_indices.graphics, 0, &engine->queues.graphics);
+	vkGetDeviceQueue(engine->device, engine->queue_indices.compute, 0, &engine->queues.compute);
+	vkGetDeviceQueue(engine->device, engine->queue_indices.presentation, 0, &engine->queues.presentation);
+
+	*engine_instance = engine;
+	return ENGINE_RESULT_SUCCESS;
+};
+
+void EngineDestroy(Engine *engine) {
+	vkDestroyDevice(engine->device, NULL);
 	vkDestroySurfaceKHR(engine->instance, engine->surface, NULL);
 	vkDestroyInstance(engine->instance, NULL);
+	glfwDestroyWindow(engine->window);
 	glfwTerminate();
 	free(engine);
 }

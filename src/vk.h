@@ -16,8 +16,8 @@ typedef struct {
     enum {
         SUCCESS,
         GLFW_CANNOT_INIT,
-        INSTANCE_CREATION,
-        WINDOW_CREATION,
+        INSTANCE_CREATION_FAILED,
+        WINDOW_CREATION_FAILED,
         GPU_NOT_FOUND,
         INAPPROPRIATE_GPU,
         DEVICE_CREATION_FAILED,
@@ -28,6 +28,8 @@ typedef struct {
         DEBUG_INFO_NOT_FOUND,
         DEBUG_CREATION_FAILED,
         OUT_OF_MEMORY,
+
+        SHADER_CREATION_FAILED
     } EngineCode;
     size_t VulkanCode;
 } EngineResult;
@@ -36,8 +38,11 @@ typedef struct {
 
 #define MAKE_VERSION(major, minor, patch) ((((uint32_t)(major)) << 22U) | (((uint32_t)(minor)) << 12U) | ((uint32_t)(patch)))
 
-EngineResult engine_init(Engine *engine, EngineCI engineCI);
-void engine_destroy(Engine *engine);
+EngineResult EngineInit(Engine **engine, EngineCI engineCI);
+void EngineDestroy(Engine *engine);
+
+EngineResult EngineSwapchainCreate(Engine *engine);
+void EngineSwapchainDestroy(Engine *engine);
 
 bool EngineWindowShouldClose(Engine *engine);
 void EngineRenderingDone(Engine *engine);

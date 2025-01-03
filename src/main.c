@@ -9,8 +9,13 @@
 #define HEIGHT 600
 #define DISPLAY_NAME "mijn vulkan app"
 
+EngineResult res;
 
 int main() {
+	#ifndef NDEBUG
+		printf("DEBUG IS ON\n");
+	#endif
+
 	EngineCI engineCreateInfo = {
 		.appName = "mammamia",
 		.displayName = DISPLAY_NAME,
@@ -19,13 +24,16 @@ int main() {
 		.height = HEIGHT
 	};
 	Engine *engine_instance = NULL;
-	EngineResult res = engine_init(engine_instance, engineCreateInfo);
+	res = EngineInit(&engine_instance, engineCreateInfo);
+	printf("(%d; %d)\n", res.EngineCode, res.VulkanCode);
 	if(res.EngineCode != SUCCESS) {
-		printf("whee whee\n");
+		exit(-1);
 	}
-	while(!EngineWindowShouldClose(engine_instance)) {
-		EngineRenderingDone(engine_instance);
+	res = EngineSwapchainCreate(engine_instance);
+	printf("(%d; %d)\n", res.EngineCode, res.VulkanCode);
+	if(res.EngineCode != SUCCESS) {
+		exit(-1);
 	}
-	printf("all's well that ends well\n");
-	engine_destroy(engine_instance);
+	EngineSwapchainDestroy(engine_instance);
+	EngineDestroy(engine_instance);
 }

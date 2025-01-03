@@ -3,3 +3,4 @@ build
 CMakeFiles
 *.cmake
 CMakeCache.txt
+vulkan-hello-world
