@@ -8,7 +8,16 @@
 #include <string.h>
 #include <stdlib.h>
 
-typedef struct engine_h {
+typedef struct {
+	VkCommandPool pool;
+	VkCommandBuffer buffer;
+	VkSemaphore swapchainSemaphore, renderSemaphore;
+	VkFence renderFence;
+} QueueCommand;
+
+#define FRAME_OVERLAP 2
+
+struct Engine {
 	size_t testNumber;
     VkDevice device;
     VkInstance instance;
@@ -20,29 +29,49 @@ typedef struct engine_h {
 		uint32_t graphics;
 		uint32_t presentation;
 		uint32_t compute;
+		uint32_t transfer;
 	} queue_indices;
 	struct {
 		VkQueue graphics;
 		VkQueue presentation;
 		VkQueue compute;
+		VkQueue transfer;
 	} queues;
     struct {
 		VkSurfaceCapabilitiesKHR capabilities;
 		VkSurfaceFormatKHR format;
 		VkPresentModeKHR presentMode;
 	} swapchainDetails;
-	
 	VkSwapchainKHR swapchain, oldSwapchain;
 	VkImage *swapchainImages;
 	VkImageView *swapchainImageViews;
 	uint32_t swapchainImageCount;
 	VkExtent2D pixelResolution;
+	
+	uint32_t cur_frame;
+	struct {
+		QueueCommand graphics[FRAME_OVERLAP],
+					compute,
+					transfer;
+	} QueueCommands;
+};
 
-	#ifndef NDEBUG
-	VkDebugUtilsMessengerEXT debugMessenger;
-	#endif
-} Engine;
+void updateCurrentFrame_(Engine *engine) {
+	engine->cur_frame++;
+	if(engine->cur_frame >= FRAME_OVERLAP) {
+		engine->cur_frame = 0;
+	}
+}
+bool EngineWindowShouldClose(Engine *engine) {
+	return glfwWindowShouldClose(engine->window);
+}
 
+typedef enum {
+	ENGINE_TRANSFER,
+    ENGINE_GRAPHICS,
+    ENGINE_PRESENT,
+    ENGINE_COMPUTE
+} CommandPoolType;
 
 inline uint32_t clampU32(uint32_t val, uint32_t min, uint32_t max) {
 	val = val < min ? min : val;
@@ -99,7 +128,6 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 	VkQueueFamilyProperties *queueProps = NULL;
 	VkExtensionProperties *extensionProps = NULL;
 	VkSurfaceFormatKHR *formats = NULL;
-	VkPresentModeKHR *presentMode = NULL;
 	bool suitableDeviceFound = false;
 
 	for(int i = 0; i < deviceCount; i++) {
@@ -107,7 +135,7 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		vkGetPhysicalDeviceProperties(devices[i], &props);
 		printf("Device Name: %s\n", props.deviceName);
 
-		size_t graphicsI = -1, presentationI = -1, computeI = -1;
+		size_t graphicsI = -1, presentationI = -1, computeI = -1, transferI = -1;
 		//First checking for queue capabilities; if they are not sufficient then the rest doesnt even matter
 		size_t queuePropCount = 0;
 		vkGetPhysicalDeviceQueueFamilyProperties(devices[i], &queuePropCount, NULL);
@@ -129,15 +157,17 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 			if(queueProps[j].queueFlags & VK_QUEUE_COMPUTE_BIT) {
 				computeI = j;
 			}
+			if(queueProps[j].queueFlags & VK_QUEUE_TRANSFER_BIT) {
+				transferI = j;
+			}
 			VkBool32 presentSupport = false;
 			vkGetPhysicalDeviceSurfaceSupportKHR(devices[i], j, engine->surface, &presentSupport);
-			if(presentSupport) {
+			if(presentSupport)
 				presentationI = j;
-			}
 			if(graphicsI > -1 && presentationI > -1 && computeI > -1)
 				break;
 		}
-		if(graphicsI == -1 || presentationI == -1 || computeI == -1) {
+		if(graphicsI == -1 || presentationI == -1 || computeI == -1 || transferI == -1) {
 			continue;
 		}
 
@@ -206,38 +236,20 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		}
 		if(formatIndex == -1)
 			continue;
-
-
-		uint32_t presentModeCount = 0;
-		vkGetPhysicalDeviceSurfacePresentModesKHR(devices[i], engine->surface, &presentModeCount, NULL);
-		if(presentModeCount == 0)
-			continue;
-		if(presentModeCount > presentMemSize) {
-			if(presentMode == NULL) {
-				presentMode = malloc(sizeof(VkPresentModeKHR) * presentModeCount);
-			} else {
-				presentMode = realloc(presentMode, sizeof(VkPresentModeKHR) * presentModeCount);
-			}
-			presentMemSize = presentModeCount;
-		}
-		vkGetPhysicalDeviceSurfacePresentModesKHR(devices[i], engine->surface, &presentModeCount, presentMode);
-		VkPresentModeKHR bestPresentMode = VK_PRESENT_MODE_FIFO_KHR;
-		for(int i = 0; i < presentModeCount; i++) {
-			if(presentMode[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
-				bestPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
-				break;
-			}
-		}
 		if(desiredFeatures13.dynamicRendering && 
 			desiredFeatures13.synchronization2 &&
 			desiredFeatures12.bufferDeviceAddress &&
 			desiredFeatures12.descriptorIndexing) {
+
 			engine->physicalDevice = devices[i];
+
 			engine->queue_indices.graphics = graphicsI;
 			engine->queue_indices.compute = computeI;
 			engine->queue_indices.presentation = presentationI;
+			engine->queue_indices.transfer = transferI;
+
 			engine->swapchainDetails.format = formats[formatIndex];
-			engine->swapchainDetails.presentMode = bestPresentMode;
+			engine->swapchainDetails.presentMode = VK_PRESENT_MODE_FIFO_KHR;
 			suitableDeviceFound = true;
 			if(props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
 				break;
@@ -249,7 +261,6 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 	printf("\x1b[1;37mThe chosen device: %s\n\x1b[0m", props.deviceName);
 	free(queueProps);
 	free(extensionProps);
-	free(presentMode);
 	free(formats);
 	ERR_CHECK(suitableDeviceFound, INAPPROPRIATE_GPU, VK_SUCCESS);
 	return ENGINE_RESULT_SUCCESS;
@@ -275,7 +286,7 @@ EngineResult EngineSwapchainCreate(Engine *engine) {
 		.presentMode = engine->swapchainDetails.presentMode,
 		.imageExtent = engine->pixelResolution,
 		.imageArrayLayers = 1,
-		.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, //IF YOU WANNA RENDER TO ANOTHER IMAGE FIRST, PUT VK_IMAGE_USAGE_TRANSFER_ATTACHMENT_BIT
+		.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
 		.preTransform = engine->swapchainDetails.capabilities.currentTransform,
 		.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
 		.clipped = VK_TRUE,
@@ -285,12 +296,10 @@ EngineResult EngineSwapchainCreate(Engine *engine) {
 	
 	//MIGHT change it to compute instead of graphics
 	uint32_t queueFamilyIndices[2] = {engine->queue_indices.graphics, engine->queue_indices.presentation};
+	swapchainCI.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	if(engine->queue_indices.graphics == engine->queue_indices.presentation) {
-		swapchainCI.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
 		swapchainCI.queueFamilyIndexCount = 2;
 		swapchainCI.pQueueFamilyIndices = &queueFamilyIndices;
-	} else {
-		swapchainCI.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	}
 
 	res = vkCreateSwapchainKHR(engine->device, &swapchainCI, NULL, &engine->swapchain);
@@ -330,8 +339,192 @@ void EngineSwapchainDestroy(Engine *engine) {
 	vkDestroySwapchainKHR(engine->device, engine->swapchain, NULL);
 }
 
+EngineResult QueueCommandCreate(Engine *engine, CommandPoolType type, QueueCommand *queueCommand) {
+	uint32_t index = 0;
+	switch(type) {
+	case ENGINE_GRAPHICS:
+		index = engine->queue_indices.graphics;
+		break;
+	case ENGINE_COMPUTE:
+		index = engine->queue_indices.compute;
+		break;
+	case ENGINE_PRESENT:
+		index = engine->queue_indices.presentation;
+		break;
+	}
+	VkCommandPoolCreateInfo commandPoolCI = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+		.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+		.pNext = NULL,
+		.queueFamilyIndex = index
+	};
+	res = vkCreateCommandPool(engine->device, &commandPoolCI, NULL, &queueCommand->pool);
+	ERR_CHECK(res != VK_SUCCESS, QUEUECOMMAND_CREATION_FAILED, res);
+
+	return ENGINE_RESULT_SUCCESS;
+}
+
+EngineResult QueueCommandAllocate(Engine *engine, QueueCommand *queueCommand) {
+	VkCommandBufferAllocateInfo bufferAllocateInfo = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+		.commandPool = queueCommand->pool,
+		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+		.commandBufferCount = 1,
+		.pNext = NULL
+	};
+	res = vkAllocateCommandBuffers(engine->device, &bufferAllocateInfo, &queueCommand->buffer);
+	ERR_CHECK(res == VK_SUCCESS, QUEUECOMMAND_ALLOCATION_FAILED, res);
+	return ENGINE_RESULT_SUCCESS;
+}
+
+EngineResult TransferImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout) {
+	printf("Transferring Image\n");
+	VkImageSubresourceRange subresourceRange = {
+		.aspectMask = (newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT, //idk why but for now i keep
+		.baseMipLevel = 0,
+		.levelCount = VK_REMAINING_MIP_LEVELS,
+		.baseArrayLayer = 0,
+		.layerCount = VK_REMAINING_ARRAY_LAYERS
+	};
+	VkImageMemoryBarrier2 imageBarrier = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+		.pNext = NULL,
+		.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+		.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+		.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
+		.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+		.oldLayout = oldLayout,
+		.newLayout = newLayout,
+		.subresourceRange = subresourceRange,
+		.image = image
+	};
+	VkDependencyInfo depInfo = {
+		.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+		.pNext = NULL,
+		.imageMemoryBarrierCount = 1,
+		.pImageMemoryBarriers = &imageBarrier
+	};
+	vkCmdPipelineBarrier2(cmd, &depInfo);
+	return ENGINE_RESULT_SUCCESS;
+}
+
+EngineResult EngineDraw(Engine *engine, EngineColor background) {
+	EngineResult eRes = {0};
+	eRes = QueueCommandAllocate(engine, &engine->QueueCommands.graphics[engine->cur_frame]);
+	ERR_CHECK(eRes.EngineCode == SUCCESS, eRes.EngineCode, eRes.VulkanCode);
+
+	res = vkWaitForFences(engine->device, 1, &engine->QueueCommands.graphics[engine->cur_frame].renderFence, true, 1000000000);
+	ERR_CHECK(res == VK_SUCCESS, FENCE_NOT_WORKING, res);
+	res = vkResetFences(engine->device, 1, &engine->QueueCommands.graphics[engine->cur_frame].renderFence);
+	ERR_CHECK(res == VK_SUCCESS, FENCE_NOT_WORKING, res);
+
+	VkSemaphoreCreateInfo semaphoreCI = {
+		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+		.flags = 0,
+		.pNext = NULL	
+	};
+
+	res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->QueueCommands.graphics[engine->cur_frame].renderSemaphore);
+	ERR_CHECK(res == VK_SUCCESS, SEMAPHORE_CREATION_FAILED, res);
+	res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->QueueCommands.graphics[engine->cur_frame].swapchainSemaphore);
+	ERR_CHECK(res == VK_SUCCESS, SEMAPHORE_CREATION_FAILED, res);
+
+	
+	uint32_t swapchainImageIndex = 0;
+	vkAcquireNextImageKHR(engine->device, engine->swapchain, 1000000000, engine->QueueCommands.graphics[engine->cur_frame].swapchainSemaphore, NULL, &swapchainImageIndex);
+	
+	// vkCreateImage(engine->device, )
+	VkCommandBufferBeginInfo beginInfo = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+		.pInheritanceInfo = NULL,
+		.pNext = NULL
+	};
+
+	VkImageSubresourceRange backgroundSubresourceRange = {
+		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+		.baseMipLevel = 0,
+		.levelCount = 1,
+		.baseArrayLayer = 0,
+		.layerCount = 1
+	};
+	vkResetCommandBuffer(engine->QueueCommands.graphics[engine->cur_frame].buffer, 0);
+	vkBeginCommandBuffer(engine->QueueCommands.graphics[engine->cur_frame].buffer, &beginInfo);
+	VkClearColorValue backgroundColor = {
+		// .uint32 = {background.r, background.g, background.b, background.a}
+		.float32 = {0, 1, 0, 1}
+	};
+	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+	vkCmdClearColorImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_GENERAL, &backgroundColor, 1, &backgroundSubresourceRange);
+	/*more drawing code will go here*/
+	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+	res = vkEndCommandBuffer(engine->QueueCommands.graphics[engine->cur_frame].buffer);
+	ERR_CHECK(res == VK_SUCCESS, CANNOT_PREPARE_FOR_SUBMISSION, res);
+
+	VkCommandBufferSubmitInfo cmdSubmitInfo = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+		.commandBuffer = engine->QueueCommands.graphics[engine->cur_frame].buffer,
+		.deviceMask = 0,
+		.pNext = NULL
+	};
+
+	VkSemaphoreSubmitInfo waitInfo = {
+		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+		.deviceIndex = 0,
+		.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+		.semaphore = engine->QueueCommands.graphics[engine->cur_frame].swapchainSemaphore
+	}, signalInfo = {
+		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+		.deviceIndex = 0,
+		.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+		.semaphore = engine->QueueCommands.graphics[engine->cur_frame].renderSemaphore
+	};
+
+	VkSubmitInfo2 queueSubmitInfo = {
+		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+		.commandBufferInfoCount = 1,
+		.pCommandBufferInfos = &cmdSubmitInfo,
+		.signalSemaphoreInfoCount = 1,
+		.pSignalSemaphoreInfos = &signalInfo,
+		.waitSemaphoreInfoCount = 1,
+		.pWaitSemaphoreInfos = &waitInfo,
+		.flags = 0
+	};
+
+	res = vkQueueSubmit2(engine->queues.graphics, 1, &queueSubmitInfo, engine->QueueCommands.graphics[engine->cur_frame].renderFence);
+	ERR_CHECK(res == VK_SUCCESS, CANNOT_SUBMIT_TO_GPU, res);
+	
+	VkPresentInfoKHR presentInfo = {
+		.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+		.pNext = NULL,
+		.swapchainCount = 1,
+		.pSwapchains = &engine->swapchain,
+		.waitSemaphoreCount = 1,
+		.pWaitSemaphores = &engine->QueueCommands.graphics[engine->cur_frame].renderSemaphore,
+		.pImageIndices = &swapchainImageIndex,
+	};
+	res = vkQueuePresentKHR(engine->queues.graphics, &presentInfo);
+	ERR_CHECK(res == VK_SUCCESS, CANNOT_DISPLAY, res);
+	updateCurrentFrame_(engine);
+
+	//glfwPollEvents();
+	
+	// VkCommandBufferBeginInfo transferBeginInfo = {
+	// 	.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+	// 	.flags = 0,
+	// 	.pInheritanceInfo = NULL,
+	// 	.pNext = NULL
+	// };
+	// vkBeginCommandBuffer(engine->QueueCommands.transfer.buffer, &transferBeginInfo);
+	// vkCmdCopyImage(engine->QueueCommands.transfer.buffer, cur_image, )
+
+	return ENGINE_RESULT_SUCCESS;
+}
+
 EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI) {
 	Engine *engine = malloc(sizeof(Engine));
+	*engine_instance = engine;
+	
 	engine->oldSwapchain = VK_NULL_HANDLE;
 	size_t glfwExtensionsCount = 0;
 	ERR_CHECK(glfwInit() == GLFW_TRUE, GLFW_CANNOT_INIT, VK_SUCCESS);
@@ -475,12 +668,42 @@ EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI) {
 	vkGetDeviceQueue(engine->device, engine->queue_indices.graphics, 0, &engine->queues.graphics);
 	vkGetDeviceQueue(engine->device, engine->queue_indices.compute, 0, &engine->queues.compute);
 	vkGetDeviceQueue(engine->device, engine->queue_indices.presentation, 0, &engine->queues.presentation);
+	vkGetDeviceQueue(engine->device, engine->queue_indices.transfer, 0, &engine->queues.transfer);
 
-	*engine_instance = engine;
+	QueueCommandCreate(engine, ENGINE_GRAPHICS, &engine->QueueCommands.graphics[0]);
+	QueueCommandCreate(engine, ENGINE_GRAPHICS, &engine->QueueCommands.graphics[1]);
+	QueueCommandCreate(engine, ENGINE_COMPUTE, &engine->QueueCommands.compute);
+	QueueCommandCreate(engine, ENGINE_TRANSFER, &engine->QueueCommands.transfer);
+	engine->cur_frame = 0;
+
+	VkFenceCreateInfo fenceCI = {
+		.flags = VK_FENCE_CREATE_SIGNALED_BIT,
+		.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+		.pNext = NULL
+	};
+
+	for(int i = 0; i < FRAME_OVERLAP; i++) {
+		res = vkCreateFence(engine->device, &fenceCI, NULL, &engine->QueueCommands.graphics[i].renderFence);
+		ERR_CHECK(res == VK_SUCCESS, FENCE_CREATION_FAILED, res);
+	}
 	return ENGINE_RESULT_SUCCESS;
 };
 
 void EngineDestroy(Engine *engine) {
+	vkDeviceWaitIdle(engine->device);
+	for(int i = 0; i < FRAME_OVERLAP; i++) {
+		vkDestroyFence(engine->device, engine->QueueCommands.graphics[i].renderFence, NULL);
+		vkDestroySemaphore(engine->device, engine->QueueCommands.graphics[i].renderSemaphore, NULL);
+		vkDestroySemaphore(engine->device, engine->QueueCommands.graphics[i].swapchainSemaphore, NULL);
+	}
+	// vkDestroyFence(engine->device, engine->QueueCommands.compute.renderFence, NULL);
+	// vkDestroyFence(engine->device, engine->QueueCommands.compute.renderFence, NULL);
+
+	vkDestroyCommandPool(engine->device, engine->QueueCommands.transfer.pool, NULL);
+	vkDestroyCommandPool(engine->device, engine->QueueCommands.graphics[0].pool, NULL);
+	vkDestroyCommandPool(engine->device, engine->QueueCommands.graphics[1].pool, NULL);
+	vkDestroyCommandPool(engine->device, engine->QueueCommands.compute.pool, NULL);
+
 	vkDestroyDevice(engine->device, NULL);
 	vkDestroySurfaceKHR(engine->instance, engine->surface, NULL);
 	vkDestroyInstance(engine->instance, NULL);

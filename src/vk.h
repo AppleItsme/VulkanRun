@@ -10,7 +10,7 @@ typedef struct {
 } EngineCI;
 
 
-typedef struct engine_h Engine;
+typedef struct Engine Engine;
 
 typedef struct {
     enum {
@@ -29,11 +29,24 @@ typedef struct {
         DEBUG_CREATION_FAILED,
         OUT_OF_MEMORY,
 
-        SHADER_CREATION_FAILED
+        QUEUECOMMAND_CREATION_FAILED,
+        QUEUECOMMAND_ALLOCATION_FAILED,
+
+        FENCE_CREATION_FAILED,
+        SEMAPHORE_CREATION_FAILED,
+
+        FENCE_NOT_WORKING,
+        SHADER_CREATION_FAILED,
+        CANNOT_PREPARE_FOR_SUBMISSION,
+        CANNOT_SUBMIT_TO_GPU,
+        CANNOT_DISPLAY,
     } EngineCode;
     size_t VulkanCode;
 } EngineResult;
 
+typedef struct {
+    uint8_t r,g,b,a;
+} EngineColor;
 
 
 #define MAKE_VERSION(major, minor, patch) ((((uint32_t)(major)) << 22U) | (((uint32_t)(minor)) << 12U) | ((uint32_t)(patch)))
@@ -44,5 +57,7 @@ void EngineDestroy(Engine *engine);
 EngineResult EngineSwapchainCreate(Engine *engine);
 void EngineSwapchainDestroy(Engine *engine);
 
+EngineResult EngineDraw(Engine *engine, EngineColor background);
+
 bool EngineWindowShouldClose(Engine *engine);
-void EngineRenderingDone(Engine *engine);
+// void EngineRenderingDone(Engine *engine);

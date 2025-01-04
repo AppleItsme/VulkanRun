@@ -34,6 +34,11 @@ int main() {
 	if(res.EngineCode != SUCCESS) {
 		exit(-1);
 	}
+	printf("loop begins!!\n");
+	while(!EngineWindowShouldClose(engine_instance)) {
+		res = EngineDraw(engine_instance, (EngineColor){0, 255, 0, 255});
+		printf("(%d; %d)\n", res.EngineCode, res.VulkanCode);
+	}
 	EngineSwapchainDestroy(engine_instance);
 	EngineDestroy(engine_instance);
 }
