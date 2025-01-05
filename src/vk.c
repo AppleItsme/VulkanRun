@@ -1,7 +1,6 @@
 #include "vk.h"
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
+#include <vulkan/vulkan.h>
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -22,7 +21,6 @@ struct Engine {
     VkDevice device;
     VkInstance instance;
     VkPhysicalDevice physicalDevice;
-    GLFWwindow *window;
 
     VkSurfaceKHR surface;
     struct {
@@ -62,12 +60,8 @@ void updateCurrentFrame_(Engine *engine) {
 		engine->cur_frame = 0;
 	}
 }
-bool EngineWindowShouldClose(Engine *engine) {
-	return glfwWindowShouldClose(engine->window);
-}
 
 typedef enum {
-	ENGINE_TRANSFER,
     ENGINE_GRAPHICS,
     ENGINE_PRESENT,
     ENGINE_COMPUTE
@@ -198,8 +192,6 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		if(found < ARR_SIZE(deviceExtensions)) {
 			continue;
 		}
-		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(devices[i], engine->surface, &engine->swapchainDetails.capabilities);
-
 		VkPhysicalDeviceVulkan12Features desiredFeatures12 = {
 			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
 			.pNext = NULL
@@ -266,14 +258,13 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 	return ENGINE_RESULT_SUCCESS;
 }
 
-EngineResult EngineSwapchainCreate(Engine *engine) {
-	VkExtent2D actualExtent = {0};
-	glfwGetFramebufferSize(engine->window, &actualExtent.width, &actualExtent.height);
-	engine->pixelResolution.width = clampU32(actualExtent.width, engine->swapchainDetails.capabilities.minImageExtent.width, 
+EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight) {
+	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(engine->physicalDevice, engine->surface, &engine->swapchainDetails.capabilities);
+	
+	engine->pixelResolution.width = clampU32(frameBufferWidth, engine->swapchainDetails.capabilities.minImageExtent.width, 
 													engine->swapchainDetails.capabilities.maxImageExtent.width);
-	engine->pixelResolution.height = clampU32(actualExtent.height, engine->swapchainDetails.capabilities.minImageExtent.height, 
+	engine->pixelResolution.height = clampU32(frameBufferHeight, engine->swapchainDetails.capabilities.minImageExtent.height, 
 													engine->swapchainDetails.capabilities.maxImageExtent.height);
-
 	uint32_t imageCount = engine->swapchainDetails.capabilities.minImageCount + 1;
 	if(engine->swapchainDetails.capabilities.maxImageCount > 0) {
 		imageCount = clampU32(imageCount, imageCount, engine->swapchainDetails.capabilities.maxImageCount);
@@ -359,7 +350,8 @@ EngineResult QueueCommandCreate(Engine *engine, CommandPoolType type, QueueComma
 		.queueFamilyIndex = index
 	};
 	res = vkCreateCommandPool(engine->device, &commandPoolCI, NULL, &queueCommand->pool);
-	ERR_CHECK(res != VK_SUCCESS, QUEUECOMMAND_CREATION_FAILED, res);
+	printf("Pool address: %d\n", queueCommand->pool);
+	ERR_CHECK(res == VK_SUCCESS, QUEUECOMMAND_CREATION_FAILED, res);
 
 	return ENGINE_RESULT_SUCCESS;
 }
@@ -417,18 +409,6 @@ EngineResult EngineDraw(Engine *engine, EngineColor background) {
 	ERR_CHECK(res == VK_SUCCESS, FENCE_NOT_WORKING, res);
 	res = vkResetFences(engine->device, 1, &engine->QueueCommands.graphics[engine->cur_frame].renderFence);
 	ERR_CHECK(res == VK_SUCCESS, FENCE_NOT_WORKING, res);
-
-	VkSemaphoreCreateInfo semaphoreCI = {
-		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-		.flags = 0,
-		.pNext = NULL	
-	};
-
-	res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->QueueCommands.graphics[engine->cur_frame].renderSemaphore);
-	ERR_CHECK(res == VK_SUCCESS, SEMAPHORE_CREATION_FAILED, res);
-	res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->QueueCommands.graphics[engine->cur_frame].swapchainSemaphore);
-	ERR_CHECK(res == VK_SUCCESS, SEMAPHORE_CREATION_FAILED, res);
-
 	
 	uint32_t swapchainImageIndex = 0;
 	vkAcquireNextImageKHR(engine->device, engine->swapchain, 1000000000, engine->QueueCommands.graphics[engine->cur_frame].swapchainSemaphore, NULL, &swapchainImageIndex);
@@ -451,8 +431,7 @@ EngineResult EngineDraw(Engine *engine, EngineColor background) {
 	vkResetCommandBuffer(engine->QueueCommands.graphics[engine->cur_frame].buffer, 0);
 	vkBeginCommandBuffer(engine->QueueCommands.graphics[engine->cur_frame].buffer, &beginInfo);
 	VkClearColorValue backgroundColor = {
-		// .uint32 = {background.r, background.g, background.b, background.a}
-		.float32 = {0, 1, 0, 1}
+		.float32 = {background.r, background.g, background.b, background.a}
 	};
 	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 	vkCmdClearColorImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_GENERAL, &backgroundColor, 1, &backgroundSubresourceRange);
@@ -504,10 +483,10 @@ EngineResult EngineDraw(Engine *engine, EngineColor background) {
 		.pImageIndices = &swapchainImageIndex,
 	};
 	res = vkQueuePresentKHR(engine->queues.graphics, &presentInfo);
-	ERR_CHECK(res == VK_SUCCESS, CANNOT_DISPLAY, res);
+	ERR_CHECK(res == VK_SUCCESS, CANNOT_DISPLAY, res);	
 	updateCurrentFrame_(engine);
-
-	//glfwPollEvents();
+	
+	// glfwPollEvents();
 	
 	// VkCommandBufferBeginInfo transferBeginInfo = {
 	// 	.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -521,26 +500,15 @@ EngineResult EngineDraw(Engine *engine, EngineColor background) {
 	return ENGINE_RESULT_SUCCESS;
 }
 
-EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI) {
+EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI, uintptr_t *vkInstance) {
 	Engine *engine = malloc(sizeof(Engine));
 	*engine_instance = engine;
 	
 	engine->oldSwapchain = VK_NULL_HANDLE;
-	size_t glfwExtensionsCount = 0;
-	ERR_CHECK(glfwInit() == GLFW_TRUE, GLFW_CANNOT_INIT, VK_SUCCESS);
-	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-	engine->window = glfwCreateWindow(engineCI.width, engineCI.height, engineCI.displayName, NULL, NULL);
 
 	#ifndef NDEBUG
 	ERR_CHECK(checkValidationSupport(), DEBUG_CREATION_FAILED, VK_SUCCESS);
 	#endif
-
-	const char **glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionsCount);
-	printf("===GLFW EXTENSIONS===\n");
-	for(int i = 0; i < glfwExtensionsCount; i++) {
-		printf("%s\n", glfwExtensions[i]);
-	}
 
 	VkApplicationInfo appInfo = {
 		.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -554,8 +522,8 @@ EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI) {
 	VkInstanceCreateInfo instanceCI = {
 		.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
 		.pApplicationInfo = &appInfo,
-		.enabledExtensionCount = glfwExtensionsCount,
-		.ppEnabledExtensionNames = glfwExtensions,
+		.enabledExtensionCount = engineCI.extensionsCount,
+		.ppEnabledExtensionNames = engineCI.extensions,
 		#ifndef NDEBUG
 		.enabledLayerCount = 1,
 		.ppEnabledLayerNames = validationLayers,
@@ -571,11 +539,12 @@ EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI) {
 	res = vkCreateInstance(&instanceCI, NULL, &engine->instance);
 	ERR_CHECK(res == VK_SUCCESS, INSTANCE_CREATION_FAILED, res);
 	printf("Vulkan Instance created successfully\n");
+	*vkInstance = engine->instance;
+	return ENGINE_RESULT_SUCCESS;
+};
 
-	res = glfwCreateWindowSurface(engine->instance, engine->window, NULL, &engine->surface);
-	ERR_CHECK(res == VK_SUCCESS, WINDOW_CREATION_FAILED, res);
-
-
+EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
+	engine->surface = surface;
 	engine->physicalDevice = VK_NULL_HANDLE;
 	size_t physicalDeviceCount = 0;
 	vkEnumeratePhysicalDevices(engine->instance, &physicalDeviceCount, NULL);
@@ -670,10 +639,6 @@ EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI) {
 	vkGetDeviceQueue(engine->device, engine->queue_indices.presentation, 0, &engine->queues.presentation);
 	vkGetDeviceQueue(engine->device, engine->queue_indices.transfer, 0, &engine->queues.transfer);
 
-	QueueCommandCreate(engine, ENGINE_GRAPHICS, &engine->QueueCommands.graphics[0]);
-	QueueCommandCreate(engine, ENGINE_GRAPHICS, &engine->QueueCommands.graphics[1]);
-	QueueCommandCreate(engine, ENGINE_COMPUTE, &engine->QueueCommands.compute);
-	QueueCommandCreate(engine, ENGINE_TRANSFER, &engine->QueueCommands.transfer);
 	engine->cur_frame = 0;
 
 	VkFenceCreateInfo fenceCI = {
@@ -682,32 +647,40 @@ EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI) {
 		.pNext = NULL
 	};
 
+	VkSemaphoreCreateInfo semaphoreCI = {
+		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+		.flags = 0,
+		.pNext = NULL,
+	};
+
 	for(int i = 0; i < FRAME_OVERLAP; i++) {
+		EngineResult eRes = QueueCommandCreate(engine, ENGINE_GRAPHICS, &engine->QueueCommands.graphics[i]);
+		ERR_CHECK(eRes.EngineCode == SUCCESS, eRes.EngineCode, eRes.VulkanCode);
 		res = vkCreateFence(engine->device, &fenceCI, NULL, &engine->QueueCommands.graphics[i].renderFence);
 		ERR_CHECK(res == VK_SUCCESS, FENCE_CREATION_FAILED, res);
+		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->QueueCommands.graphics[i].renderSemaphore);
+		ERR_CHECK(res == VK_SUCCESS, SEMAPHORE_CREATION_FAILED, res);
+		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->QueueCommands.graphics[i].swapchainSemaphore);
+		ERR_CHECK(res == VK_SUCCESS, SEMAPHORE_CREATION_FAILED, res);
 	}
-	return ENGINE_RESULT_SUCCESS;
-};
+}
 
 void EngineDestroy(Engine *engine) {
 	vkDeviceWaitIdle(engine->device);
+
 	for(int i = 0; i < FRAME_OVERLAP; i++) {
 		vkDestroyFence(engine->device, engine->QueueCommands.graphics[i].renderFence, NULL);
 		vkDestroySemaphore(engine->device, engine->QueueCommands.graphics[i].renderSemaphore, NULL);
 		vkDestroySemaphore(engine->device, engine->QueueCommands.graphics[i].swapchainSemaphore, NULL);
 	}
-	// vkDestroyFence(engine->device, engine->QueueCommands.compute.renderFence, NULL);
-	// vkDestroyFence(engine->device, engine->QueueCommands.compute.renderFence, NULL);
 
-	vkDestroyCommandPool(engine->device, engine->QueueCommands.transfer.pool, NULL);
+	// vkDestroyCommandPool(engine->device, engine->QueueCommands.transfer.pool, NULL);
 	vkDestroyCommandPool(engine->device, engine->QueueCommands.graphics[0].pool, NULL);
 	vkDestroyCommandPool(engine->device, engine->QueueCommands.graphics[1].pool, NULL);
-	vkDestroyCommandPool(engine->device, engine->QueueCommands.compute.pool, NULL);
+	// vkDestroyCommandPool(engine->device, engine->QueueCommands.compute.pool, NULL);
 
 	vkDestroyDevice(engine->device, NULL);
 	vkDestroySurfaceKHR(engine->instance, engine->surface, NULL);
 	vkDestroyInstance(engine->instance, NULL);
-	glfwDestroyWindow(engine->window);
-	glfwTerminate();
 	free(engine);
 }

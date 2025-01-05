@@ -6,7 +6,8 @@
 typedef struct {
     uint32_t appVersion;
     char *appName, *displayName;
-    uint32_t width, height;
+    uint32_t extensionsCount;
+    char **extensions;
 } EngineCI;
 
 
@@ -48,16 +49,14 @@ typedef struct {
     uint8_t r,g,b,a;
 } EngineColor;
 
-
 #define MAKE_VERSION(major, minor, patch) ((((uint32_t)(major)) << 22U) | (((uint32_t)(minor)) << 12U) | ((uint32_t)(patch)))
 
-EngineResult EngineInit(Engine **engine, EngineCI engineCI);
+EngineResult EngineInit(Engine **engine, EngineCI engineCI, uintptr_t *vkInstance);
+EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface);
 void EngineDestroy(Engine *engine);
-
-EngineResult EngineSwapchainCreate(Engine *engine);
+EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight);
 void EngineSwapchainDestroy(Engine *engine);
 
 EngineResult EngineDraw(Engine *engine, EngineColor background);
 
 bool EngineWindowShouldClose(Engine *engine);
-// void EngineRenderingDone(Engine *engine);

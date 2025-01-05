@@ -32,10 +32,10 @@ add_subdirectory(ThirdParty/glfw)
 
 target_link_libraries(engine PRIVATE
 	${Vulkan_LIBRARIES} 
-	glfw
 	cglm
 	)
 target_link_libraries(${PROJECT_NAME}
+	glfw
 	engine
 )
 add_compile_options(-Wall -Wextra -Wpedantic -Werror)
