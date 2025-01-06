@@ -12,6 +12,15 @@
 #define DISPLAY_NAME "mijn vulkan app"
 
 EngineResult res;
+Engine *engine_instance = NULL;
+GLFWwindow *window = NULL;
+
+
+void window_size_callback(GLFWwindow *window, int width, int height) {
+	int fBuffwidth = 0, fBuffheight = 0;
+	glfwGetFramebufferSize(window, &fBuffwidth, &fBuffheight);
+	EngineSwapchainCreate(engine_instance, fBuffwidth, fBuffheight);
+}
 
 int main() {
 	#ifndef NDEBUG
@@ -19,7 +28,7 @@ int main() {
 	#endif
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 	GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, DISPLAY_NAME, NULL, NULL);
 	EngineCI engineCreateInfo = {
 		.appName = "mammamia",
@@ -28,10 +37,8 @@ int main() {
 	};	
 	engineCreateInfo.extensions = glfwGetRequiredInstanceExtensions(&engineCreateInfo.extensionsCount);
 	
-	Engine *engine_instance = NULL;
-	uintptr_t vkInstance = 0, surface = 0;
+	uintptr_t surface = 0, vkInstance = 0;
 	res = EngineInit(&engine_instance, engineCreateInfo, &vkInstance);
-	printf("(%d; %d)\n", res.EngineCode, res.VulkanCode);
 	if(res.EngineCode != SUCCESS) {
 		exit(-1);
 	}
@@ -40,15 +47,17 @@ int main() {
 	
 	uint32_t frameBufferWidth = 0, frameBufferHeight = 0;
 	glfwGetFramebufferSize(window, &frameBufferWidth, &frameBufferHeight);
+	glfwSetWindowSizeCallback(window, window_size_callback);
 	res = EngineSwapchainCreate(engine_instance, frameBufferWidth, frameBufferHeight);
-	printf("(%d; %d)\n", res.EngineCode, res.VulkanCode);
 	if(res.EngineCode != SUCCESS) {
 		exit(-1);
 	}
-	printf("loop begins!!\n");
 	while(!glfwWindowShouldClose(window)) {
-		res = EngineDraw(engine_instance, (EngineColor){1, 0, 1, 1});
-		printf("(%d; %d)\n", res.EngineCode, res.VulkanCode);
+		EngineColor Color = {1, 0, 1, 1};
+		EngineDrawStart(engine_instance, Color);
+
+
+		EngineDrawEnd(engine_instance);
 		glfwPollEvents();
 	}
 	EngineSwapchainDestroy(engine_instance);

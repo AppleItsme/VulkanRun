@@ -57,6 +57,7 @@ void EngineDestroy(Engine *engine);
 EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight);
 void EngineSwapchainDestroy(Engine *engine);
 
-EngineResult EngineDraw(Engine *engine, EngineColor background);
+EngineResult EngineDrawStart(Engine *engine, EngineColor background);
+EngineResult EngineDrawEnd(Engine *engine);
 
 bool EngineWindowShouldClose(Engine *engine);
