@@ -8,12 +8,22 @@
 #include <stdlib.h>
 #include <debugUtils.h>
 
+#include <vk_mem_alloc.h>
+
 typedef struct {
 	VkCommandPool pool;
 	VkCommandBuffer buffer;
 	VkSemaphore swapchainSemaphore, renderSemaphore;
 	VkFence renderFence;
 } QueueCommand;
+
+typedef struct {
+    VkImage image;
+    VkImageView imageView;
+    VmaAllocation allocation;
+    VkExtent3D imageExtent;
+    VkFormat imageFormat;
+} AllocatedImage;
 
 #define FRAME_OVERLAP 2
 
@@ -45,6 +55,8 @@ struct Engine {
 	VkImageView *swapchainImageViews;
 	uint32_t swapchainImageCount;
 	VkExtent2D pixelResolution, newPixelResolution;
+
+	AllocatedImage renderingImage[FRAME_OVERLAP];
 	bool recreateSwapchain;
 	
 	uint32_t cur_frame, cur_swapchainIndex;
@@ -53,6 +65,8 @@ struct Engine {
 					compute,
 					transfer;
 	} QueueCommands;
+
+	VmaAllocator allocator;
 };
 
 void updateCurrentFrame_(Engine *engine) {
@@ -124,6 +138,77 @@ typedef struct {
 	VkSurfaceFormatKHR format;
 	VkPhysicalDevice device;
 } deviceStats;
+
+
+VkImageCreateInfo imageCreateInfo(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent) {
+    VkImageCreateInfo info = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+		.pNext = NULL,
+		.imageType = VK_IMAGE_TYPE_2D,
+		.format = format,
+		.extent = extent,
+		.mipLevels = 1,
+		.arrayLayers = 1,
+		.samples = VK_SAMPLE_COUNT_1_BIT,
+		.tiling = VK_IMAGE_TILING_OPTIMAL,
+		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+		.flags = 0,
+	};
+
+    return info;
+}
+VkImageViewCreateInfo imageViewCreateInfo(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags) {
+    // build a image-view for the depth image to use for rendering
+    VkImageViewCreateInfo info = {0};
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    info.pNext = NULL;
+
+    info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    info.image = image;
+    info.format = format;
+    info.subresourceRange.baseMipLevel = 0;
+    info.subresourceRange.levelCount = 1;
+    info.subresourceRange.baseArrayLayer = 0;
+    info.subresourceRange.layerCount = 1;
+    info.subresourceRange.aspectMask = aspectFlags;
+
+    return info;
+}
+void ImageCopy(VkCommandBuffer cmd, VkImage src, VkImage dst, VkExtent2D srcSize, VkExtent2D dstSize) {
+	VkImageSubresourceLayers subresourceLayers = {
+		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+		.baseArrayLayer = 0,
+		.mipLevel = 0,
+		.layerCount = 1
+	};
+	VkImageBlit2 blitRegion = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
+		.pNext = NULL,
+		.srcOffsets[1] = (VkOffset3D) {
+			.x = srcSize.width,
+			.y = srcSize.height,
+			.z = 1
+		},
+		.dstOffsets[1] = (VkOffset3D) {
+			.x = dstSize.width,
+			.y = dstSize.height,
+			.z = 1
+		},
+		.srcSubresource = subresourceLayers,
+		.dstSubresource = subresourceLayers
+	};
+	VkBlitImageInfo2 blitImageInfo = {
+		.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2,
+		.dstImage = dst,
+		.srcImage = src,
+		.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		.filter = VK_FILTER_LINEAR,
+		.regionCount = 1,
+		.pRegions = &blitRegion
+	};
+	vkCmdBlitImage2(cmd, &blitImageInfo);
+}
 
 EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t deviceCount, Engine *engine) {
 	size_t queueMemSize = 0,
@@ -247,7 +332,7 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		vkGetPhysicalDeviceSurfaceFormatsKHR(devices[i], engine->surface, &formatCount, formats);
 		bool goodFormat = false;
 		for(int i = 0; i < formatCount; i++) {
-			if(formats[i].format == VK_FORMAT_B8G8R8A8_SRGB && formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+			if(formats[i].format == VK_FORMAT_R8G8B8A8_SRGB && formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
 				goodFormat = true;
 				cur_deviceStats.format = formats[i];
 				break;
@@ -358,10 +443,40 @@ EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, ui
 		};
 		vkCreateImageView(engine->device, &imageViewCI, NULL, &engine->swapchainImageViews[i]);
 	}
+
+	for(int i = 0; i < FRAME_OVERLAP; i++) {
+		engine->renderingImage[i].imageExtent = (VkExtent3D){
+			.width = engine->pixelResolution.width,
+			.height = engine->pixelResolution.height,
+			.depth = 1,
+		};
+		engine->renderingImage[i].imageFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+		
+		VkImageCreateInfo renderImageCI = imageCreateInfo(engine->renderingImage[i].imageFormat, 
+			VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT | (engine->hardwareRayTracing ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0),
+			engine->renderingImage[i].imageExtent
+		);
+		renderImageCI.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		VmaAllocationCreateInfo renderImageAllocationCI = {
+			.usage = VMA_MEMORY_USAGE_GPU_ONLY,
+			.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+		};
+		res = vmaCreateImage(engine->allocator, &renderImageCI, &renderImageAllocationCI, &engine->renderingImage[i].image, &engine->renderingImage[i].allocation, NULL);
+		ERR_CHECK(res == VK_SUCCESS, SWAPCHAIN_FAILED, res);
+	}
+	//do err check later ^^
+	// VkImageViewCreateInfo renderingImageViewCI = imageViewCreateInfo(engine->renderingImage.imageFormat, engine->renderingImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
+	// // vkCreateImageView(engine->device, &renderingImageViewCI, NULL, &engine->renderingImage.imageView);
+	//do err check later ^^
+
 	return ENGINE_RESULT_SUCCESS;
 }
 
 void EngineSwapchainDestroy(Engine *engine) {
+	vkQueueWaitIdle(engine->queues.graphics); //or compute
+	for(int i = 0; i < FRAME_OVERLAP; i++) {
+		vmaDestroyImage(engine->allocator, engine->renderingImage[i].image, engine->renderingImage[i].allocation);
+	}
 	for(int i = 0; i < engine->swapchainImageCount; i++) {
 		vkDestroyImageView(engine->device, engine->swapchainImageViews[i], NULL);
 	}
@@ -469,13 +584,19 @@ EngineResult EngineDrawStart(Engine *engine, EngineColor background) {
 	VkClearColorValue backgroundColor = {
 		.float32 = {background.r, background.g, background.b, background.a}
 	};
-	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[engine->cur_swapchainIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-	vkCmdClearColorImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[engine->cur_swapchainIndex], VK_IMAGE_LAYOUT_GENERAL, &backgroundColor, 1, &backgroundSubresourceRange);
+	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->renderingImage[engine->cur_frame].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[engine->cur_swapchainIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+	vkCmdClearColorImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->renderingImage[engine->cur_frame].image, VK_IMAGE_LAYOUT_GENERAL, &backgroundColor, 1, &backgroundSubresourceRange);
 	return ENGINE_RESULT_SUCCESS;
 }
 
 EngineResult EngineDrawEnd(Engine *engine) {
-	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[engine->cur_swapchainIndex], VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->renderingImage[engine->cur_frame].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+	ImageCopy(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->renderingImage[engine->cur_frame].image, engine->swapchainImages[engine->cur_swapchainIndex], (VkExtent2D){
+		.width = engine->renderingImage[engine->cur_frame].imageExtent.width,
+		.height = engine->renderingImage[engine->cur_frame].imageExtent.height}, engine->pixelResolution);
+	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[engine->cur_swapchainIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+	
 	res = vkEndCommandBuffer(engine->QueueCommands.graphics[engine->cur_frame].buffer);
 	ERR_CHECK(res == VK_SUCCESS, CANNOT_PREPARE_FOR_SUBMISSION, res);
 
@@ -689,11 +810,21 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->QueueCommands.graphics[i].swapchainSemaphore);
 		ERR_CHECK(res == VK_SUCCESS, SEMAPHORE_CREATION_FAILED, res);
 	}
+
+	VmaAllocatorCreateInfo allocatorCI = {
+		.device = engine->device,
+		.instance = engine->instance,
+		.physicalDevice = engine->physicalDevice,
+		.vulkanApiVersion = VK_API_VERSION_1_3,
+		.pAllocationCallbacks = NULL,
+		.pDeviceMemoryCallbacks = NULL,
+	};
+	vmaCreateAllocator(&allocatorCI, &engine->allocator);
 }
 
 void EngineDestroy(Engine *engine) {
 	vkDeviceWaitIdle(engine->device);
-
+	vmaDestroyAllocator(engine->allocator);
 	for(int i = 0; i < FRAME_OVERLAP; i++) {
 		vkDestroyFence(engine->device, engine->QueueCommands.graphics[i].renderFence, NULL);
 		vkDestroySemaphore(engine->device, engine->QueueCommands.graphics[i].renderSemaphore, NULL);

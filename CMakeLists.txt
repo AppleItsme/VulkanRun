@@ -2,35 +2,40 @@ cmake_minimum_required(VERSION 3.25)
 
 Project (
 	vulkanTest
-	LANGUAGES C
+	LANGUAGES C CXX
 	VERSION 0.1
 	)
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED TRUE)
 set(BUILD_SHARED_LIBS OFF)
 
 
-#set to YOUR vulkansdk path
-set(ENV{VULKAN_SDK} "C:/VulkanSDK/1.3.296.0")
+
 if(MSVC)
 	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 find_package(Vulkan REQUIRED)
+include_directories(${Vulkan_INCLUDE_DIRS})
 
 add_executable(${PROJECT_NAME} src/main.c)
 add_library(engine src/vk.c)
+add_library(vma_usage src/vma.cpp)
+target_include_directories(vma_usage PRIVATE ThirdParty/VulkanMemoryAllocator/include)
 
-#same here
-include_directories($ENV{VULKAN_SDK}/Include)
-include_directories(ThirdParty/glfw/include)
-include_directories(ThirdParty/cglm/include)
-include_directories(src/)
 
 add_subdirectory(ThirdParty/cglm)
 add_subdirectory(ThirdParty/glfw)
 
+include_directories(ThirdParty/glfw/include)
+include_directories(ThirdParty/cglm/include)
+target_include_directories(engine PRIVATE ThirdParty/VulkanMemoryAllocator/include)
+include_directories(src/)
+
+
 target_link_libraries(engine PRIVATE
+	vma_usage
 	${Vulkan_LIBRARIES} 
 	cglm
 	)

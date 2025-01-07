@@ -19,7 +19,11 @@ GLFWwindow *window = NULL;
 void window_size_callback(GLFWwindow *window, int width, int height) {
 	int fBuffwidth = 0, fBuffheight = 0;
 	glfwGetFramebufferSize(window, &fBuffwidth, &fBuffheight);
-	EngineSwapchainCreate(engine_instance, fBuffwidth, fBuffheight);
+	res = EngineSwapchainCreate(engine_instance, fBuffwidth, fBuffheight);
+	if(res.EngineCode != SUCCESS) {
+		printf("swapchain failed\n");
+		exit(-1);
+	}
 }
 
 int main() {
@@ -50,10 +54,11 @@ int main() {
 	glfwSetWindowSizeCallback(window, window_size_callback);
 	res = EngineSwapchainCreate(engine_instance, frameBufferWidth, frameBufferHeight);
 	if(res.EngineCode != SUCCESS) {
+		printf("swapchain failed\n %d", res.VulkanCode);
 		exit(-1);
 	}
 	while(!glfwWindowShouldClose(window)) {
-		EngineColor Color = {1, 0, 1, 1};
+		EngineColor Color = {0, 0, 1, 1};
 		EngineDrawStart(engine_instance, Color);
 
 
