@@ -19,9 +19,10 @@ GLFWwindow *window = NULL;
 void window_size_callback(GLFWwindow *window, int width, int height) {
 	int fBuffwidth = 0, fBuffheight = 0;
 	glfwGetFramebufferSize(window, &fBuffwidth, &fBuffheight);
+	EngineSwapchainDestroy(engine_instance);
 	res = EngineSwapchainCreate(engine_instance, fBuffwidth, fBuffheight);
 	if(res.EngineCode != SUCCESS) {
-		printf("swapchain failed\n");
+		printf("swapchain failed: %d\n", res.VulkanCode);
 		exit(-1);
 	}
 }

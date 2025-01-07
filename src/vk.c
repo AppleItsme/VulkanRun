@@ -373,9 +373,6 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 }
 
 EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight) {
-	if(engine->swapchain != VK_NULL_HANDLE) {
-		engine->oldSwapchain = engine->swapchain;
-	}
 	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(engine->physicalDevice, engine->surface, &engine->swapchainDetails.capabilities);
 	
 	engine->pixelResolution.width = clampU32(frameBufferWidth, engine->swapchainDetails.capabilities.minImageExtent.width, 
@@ -412,15 +409,6 @@ EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, ui
 
 	res = vkCreateSwapchainKHR(engine->device, &swapchainCI, NULL, &engine->swapchain);
 	ERR_CHECK(res == VK_SUCCESS, SWAPCHAIN_FAILED, res);
-
-	if(engine->oldSwapchain != VK_NULL_HANDLE) {
-		for(int i = 0; i < engine->swapchainImageCount; i++) {
-			vkDestroyImageView(engine->device, engine->swapchainImageViews[i], NULL);
-		}
-		free(engine->swapchainImageViews);
-		vkDestroySwapchainKHR(engine->device, engine->oldSwapchain, NULL);
-	}
-
 	vkGetSwapchainImagesKHR(engine->device, engine->swapchain, &engine->swapchainImageCount, NULL);
 	engine->swapchainImages = malloc(sizeof(VkImage) * engine->swapchainImageCount);
 	vkGetSwapchainImagesKHR(engine->device, engine->swapchain, &engine->swapchainImageCount, engine->swapchainImages);
@@ -523,7 +511,7 @@ EngineResult QueueCommandAllocate(Engine *engine, QueueCommand *queueCommand) {
 	return ENGINE_RESULT_SUCCESS;
 }
 
-EngineResult TransferImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout) {
+EngineResult ChangeImageLayout(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkPipelineStageFlags2 pipelineStage) {
 	VkImageSubresourceRange subresourceRange = {
 		.aspectMask = (newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT, //idk why but for now i keep
 		.baseMipLevel = 0,
@@ -534,8 +522,8 @@ EngineResult TransferImage(VkCommandBuffer cmd, VkImage image, VkImageLayout old
 	VkImageMemoryBarrier2 imageBarrier = {
 		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
 		.pNext = NULL,
-		.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
-		.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+		.srcStageMask = pipelineStage,
+		.dstStageMask = pipelineStage,
 		.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
 		.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
 		.oldLayout = oldLayout,
@@ -584,18 +572,42 @@ EngineResult EngineDrawStart(Engine *engine, EngineColor background) {
 	VkClearColorValue backgroundColor = {
 		.float32 = {background.r, background.g, background.b, background.a}
 	};
-	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->renderingImage[engine->cur_frame].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[engine->cur_swapchainIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+	ChangeImageLayout(engine->QueueCommands.graphics[engine->cur_frame].buffer, 
+				engine->renderingImage[engine->cur_frame].image, 
+				VK_IMAGE_LAYOUT_UNDEFINED, 
+				VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+	ChangeImageLayout(engine->QueueCommands.graphics[engine->cur_frame].buffer, 
+				engine->swapchainImages[engine->cur_swapchainIndex], 
+				VK_IMAGE_LAYOUT_UNDEFINED, 
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
+	);
 	vkCmdClearColorImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->renderingImage[engine->cur_frame].image, VK_IMAGE_LAYOUT_GENERAL, &backgroundColor, 1, &backgroundSubresourceRange);
 	return ENGINE_RESULT_SUCCESS;
 }
 
 EngineResult EngineDrawEnd(Engine *engine) {
-	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->renderingImage[engine->cur_frame].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-	ImageCopy(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->renderingImage[engine->cur_frame].image, engine->swapchainImages[engine->cur_swapchainIndex], (VkExtent2D){
-		.width = engine->renderingImage[engine->cur_frame].imageExtent.width,
-		.height = engine->renderingImage[engine->cur_frame].imageExtent.height}, engine->pixelResolution);
-	TransferImage(engine->QueueCommands.graphics[engine->cur_frame].buffer, engine->swapchainImages[engine->cur_swapchainIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+	ChangeImageLayout(engine->QueueCommands.graphics[engine->cur_frame].buffer, 
+				engine->renderingImage[engine->cur_frame].image, 
+				VK_IMAGE_LAYOUT_GENERAL,
+				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT
+	);
+	ImageCopy(engine->QueueCommands.graphics[engine->cur_frame].buffer, 
+				engine->renderingImage[engine->cur_frame].image, 
+				engine->swapchainImages[engine->cur_swapchainIndex], (VkExtent2D){
+					.width = engine->renderingImage[engine->cur_frame].imageExtent.width,
+					.height = engine->renderingImage[engine->cur_frame].imageExtent.height
+				}, 
+				engine->pixelResolution
+	);
+	ChangeImageLayout(engine->QueueCommands.graphics[engine->cur_frame].buffer, 
+					engine->swapchainImages[engine->cur_swapchainIndex], 
+					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+					VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+					VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT
+	);
 	
 	res = vkEndCommandBuffer(engine->QueueCommands.graphics[engine->cur_frame].buffer);
 	ERR_CHECK(res == VK_SUCCESS, CANNOT_PREPARE_FOR_SUBMISSION, res);
