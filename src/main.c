@@ -1,4 +1,4 @@
-#include <vk.h>
+#include <Engine.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
@@ -35,6 +35,7 @@ int main() {
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 	GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, DISPLAY_NAME, NULL, NULL);
+	glfwSetWindowSizeLimits(window, 200, 200, GLFW_DONT_CARE, GLFW_DONT_CARE);
 	EngineCI engineCreateInfo = {
 		.appName = "mammamia",
 		.displayName = DISPLAY_NAME,
@@ -58,12 +59,22 @@ int main() {
 		printf("swapchain failed\n %d", res.VulkanCode);
 		exit(-1);
 	}
+	printf("loop begins!\n");
 	while(!glfwWindowShouldClose(window)) {
 		EngineColor Color = {0, 0, 1, 1};
-		EngineDrawStart(engine_instance, Color);
-
-
-		EngineDrawEnd(engine_instance);
+		res = EngineDrawStart(engine_instance, Color);
+		if(res.EngineCode != SUCCESS) {
+			printf("drawstart failed\n %d", res.VulkanCode);
+			exit(-1);
+		}
+		printf("hello?\n");
+		res = EngineDrawEnd(engine_instance);
+		printf("ok frame is done\n");
+		if(res.EngineCode != SUCCESS) {
+			printf("drawend failed\n %d", res.VulkanCode);
+			exit(-1);
+		}
+		printf("it succeeded?\n");
 		glfwPollEvents();
 	}
 	EngineSwapchainDestroy(engine_instance);

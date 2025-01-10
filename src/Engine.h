@@ -26,6 +26,8 @@ typedef struct {
         SWAPCHAIN_FAILED,
         IMAGE_VIEW_FAILED,
 
+        CANNOT_CREATE_SYNCHRONISING_VARIABLES,
+
         DEBUG_INFO_NOT_FOUND,
         DEBUG_CREATION_FAILED,
         OUT_OF_MEMORY,
@@ -37,13 +39,21 @@ typedef struct {
         SEMAPHORE_CREATION_FAILED,
 
         FENCE_NOT_WORKING,
-        SHADER_CREATION_FAILED,
         CANNOT_PREPARE_FOR_SUBMISSION,
         CANNOT_SUBMIT_TO_GPU,
         CANNOT_DISPLAY,
+        
+        DESCRIPTOR_SET_CREATION_FAILED,
     } EngineCode;
     size_t VulkanCode;
 } EngineResult;
+
+typedef struct {
+    enum {
+        RENDERING,
+    } purpose;
+    uint32_t size;
+} EngineDescriptorCreateInfo;
 
 typedef struct {
     uint8_t r,g,b,a;
@@ -59,5 +69,3 @@ void EngineSwapchainDestroy(Engine *engine);
 
 EngineResult EngineDrawStart(Engine *engine, EngineColor background);
 EngineResult EngineDrawEnd(Engine *engine);
-
-bool EngineWindowShouldClose(Engine *engine);

@@ -20,10 +20,10 @@ find_package(Vulkan REQUIRED)
 include_directories(${Vulkan_INCLUDE_DIRS})
 
 add_executable(${PROJECT_NAME} src/main.c)
-add_library(engine src/vk.c)
+add_library(engine src/Engine.c)
 add_library(vma_usage src/vma.cpp)
-target_include_directories(vma_usage PRIVATE ThirdParty/VulkanMemoryAllocator/include)
 
+target_include_directories(vma_usage PRIVATE ThirdParty/VulkanMemoryAllocator/include)
 
 add_subdirectory(ThirdParty/cglm)
 add_subdirectory(ThirdParty/glfw)
@@ -32,7 +32,6 @@ include_directories(ThirdParty/glfw/include)
 include_directories(ThirdParty/cglm/include)
 target_include_directories(engine PRIVATE ThirdParty/VulkanMemoryAllocator/include)
 include_directories(src/)
-
 
 target_link_libraries(engine PRIVATE
 	vma_usage
