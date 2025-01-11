@@ -43,6 +43,7 @@ typedef struct {
         CANNOT_SUBMIT_TO_GPU,
         CANNOT_DISPLAY,
         
+        BAD_PATH,
         DESCRIPTOR_SET_CREATION_FAILED,
     } EngineCode;
     size_t VulkanCode;

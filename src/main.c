@@ -67,14 +67,11 @@ int main() {
 			printf("drawstart failed\n %d", res.VulkanCode);
 			exit(-1);
 		}
-		printf("hello?\n");
 		res = EngineDrawEnd(engine_instance);
-		printf("ok frame is done\n");
 		if(res.EngineCode != SUCCESS) {
 			printf("drawend failed\n %d", res.VulkanCode);
 			exit(-1);
 		}
-		printf("it succeeded?\n");
 		glfwPollEvents();
 	}
 	EngineSwapchainDestroy(engine_instance);

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <utils.h>
+#include <math.h>
 
 #include <vk_mem_alloc.h>
 
@@ -57,18 +58,17 @@ struct Engine {
 
 	VkSemaphore swapchainSemaphores[FRAME_OVERLAP],
 				frameReadySemaphore[FRAME_OVERLAP],
-				bufferCopySemaphore[FRAME_OVERLAP];
+				bufferCopySemaphore[FRAME_OVERLAP],
+				tmpSemaphore[FRAME_OVERLAP];
 	/*Constant command buffers*/
 	VkCommandBuffer backgroundBuffer[FRAME_OVERLAP], copyBuffer[FRAME_OVERLAP];
 };
 
 uint32_t NextFrame(Engine *engine) {
-	debug_msg("engine->cur_frame: %d; ", engine->cur_frame);
 	uint32_t cur_frame = engine->cur_frame;
 	cur_frame++;
 	if(cur_frame >= FRAME_OVERLAP)
 		cur_frame = 0;
-	debug_msg("end result: %d\n", cur_frame);
 	return cur_frame;
 }
 
@@ -93,11 +93,10 @@ inline uint32_t clampU32(uint32_t val, uint32_t min, uint32_t max) {
 
 #define ENGINE_RESULT_SUCCESS (EngineResult) {SUCCESS, VK_SUCCESS}
 
-#define MandatoryDeviceExtensionsCount 2
+#define MandatoryDeviceExtensionsCount 1
 
 const char *deviceExtensions[] = {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-	VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 
 	VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
 	VK_KHR_RAY_QUERY_EXTENSION_NAME,
@@ -433,7 +432,6 @@ EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, ui
 		};
 		vkCreateImageView(engine->device, &imageViewCI, NULL, &engine->swapchainImageViews[i]);
 	}
-
 	for(int i = 0; i < FRAME_OVERLAP; i++) {
 		engine->renderImages[i].imageExtent = (VkExtent3D){
 			.width = engine->pixelResolution.width,
@@ -446,12 +444,28 @@ EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, ui
 			VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT | (engine->hardwareRayTracing ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0),
 			engine->renderImages[i].imageExtent
 		);
-		renderImageCI.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		renderImageCI.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT | (engine->hardwareRayTracing ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0);
 		VmaAllocationCreateInfo renderImageAllocationCI = {
 			.usage = VMA_MEMORY_USAGE_GPU_ONLY,
 			.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 		};
 		res = vmaCreateImage(engine->allocator, &renderImageCI, &renderImageAllocationCI, &engine->renderImages[i].image, &engine->renderImages[i].allocation, NULL);
+		ERR_CHECK(res == VK_SUCCESS, SWAPCHAIN_FAILED, res);
+		VkImageViewCreateInfo imageViewCI = {
+			.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+			.image = engine->renderImages[i].image,
+			.viewType = VK_IMAGE_VIEW_TYPE_2D,
+			.format = engine->renderImages[i].imageFormat,
+			.components = {VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY},
+			.subresourceRange = {
+				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+				.baseMipLevel = 0,
+				.levelCount = 1,
+				.baseArrayLayer = 0,
+				.layerCount = 1
+			},
+		};
+		res = vkCreateImageView(engine->device, &imageViewCI, NULL, &engine->renderImages[i].imageView);
 		ERR_CHECK(res == VK_SUCCESS, SWAPCHAIN_FAILED, res);
 	}
 	//do err check later ^^
@@ -464,6 +478,7 @@ EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, ui
 void EngineSwapchainDestroy(Engine *engine) {
 	vkQueueWaitIdle(engine->graphics.queue);
 	for(int i = 0; i < FRAME_OVERLAP; i++) {
+		vkDestroyImageView(engine->device, engine->renderImages[i].imageView, NULL);
 		vmaDestroyImage(engine->allocator, engine->renderImages[i].image, engine->renderImages[i].allocation);
 	}
 	for(int i = 0; i < engine->swapchainImageCount; i++) {
@@ -487,12 +502,12 @@ EngineResult CreateQueue(Engine *engine, EngineQueue *queue) {
 	ERR_CHECK(res == VK_SUCCESS, QUEUECOMMAND_CREATION_FAILED, res);
 	return ENGINE_RESULT_SUCCESS;
 }
-
 EngineResult DestroyQueue(Engine *engine, EngineQueue *queue) {
 	vkQueueWaitIdle(queue->queue);
 	vkDestroyCommandPool(engine->device, queue->pool, NULL);
 	return ENGINE_RESULT_SUCCESS;
 }
+
 EngineResult ChangeImageLayout(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, VkPipelineStageFlags2 pipelineStage) {
 	VkImageSubresourceRange subresourceRange = {
 		.aspectMask = (newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT, //idk why but for now i keep
@@ -587,6 +602,160 @@ EngineResult EngineDrawStart(Engine *engine, EngineColor background) {
 
 	res = vkQueueSubmit2(engine->graphics.queue, 1, &queueSubmitInfo, NULL);
 	ERR_CHECK(res == VK_SUCCESS, CANNOT_SUBMIT_TO_GPU, res);
+
+
+	VkCommandBufferAllocateInfo allocInfo = {
+		.commandBufferCount = 1,
+		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+		.pNext = NULL,
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+		.commandPool = engine->compute.pool,
+	};
+	VkCommandBuffer cmdBuff = VK_NULL_HANDLE;
+	vkAllocateCommandBuffers(engine->device, &allocInfo, &cmdBuff);
+	VkDescriptorSetLayoutBinding descriptorBinding = {
+		.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		.binding = 0,
+		.pImmutableSamplers = 0,
+		.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+		.descriptorCount = 1,
+		.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+	};
+
+	VkDescriptorSetLayoutCreateInfo setLayoutCI = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		.bindingCount = 1,
+		.pBindings = &descriptorBinding,
+		.pNext = NULL,
+		.flags = 0
+	};
+	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+	vkCreateDescriptorSetLayout(engine->device, &setLayoutCI, NULL, &setLayout);
+	VkDescriptorPoolSize pSize = {
+		.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		.descriptorCount = 1
+	};
+
+	VkDescriptorPoolCreateInfo descriptorPoolCI = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+		.flags = 0,
+		.maxSets = 10,
+		.poolSizeCount = 1,
+		.pPoolSizes = &pSize
+	};
+	VkDescriptorPool dPool = VK_NULL_HANDLE;
+	vkCreateDescriptorPool(engine->device, &descriptorPoolCI, NULL, &dPool);
+	VkDescriptorSet set = VK_NULL_HANDLE;
+	VkDescriptorSetAllocateInfo setAllocInfo = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+		.descriptorPool = dPool,
+		.descriptorSetCount = 1,
+		.pNext = NULL,
+		.pSetLayouts = &setLayout,
+	};
+	vkAllocateDescriptorSets(engine->device, &setAllocInfo, &set);
+
+	VkDescriptorImageInfo imageInfo = {
+		.imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+		.imageView = engine->renderImages[engine->cur_frame].imageView,
+		.sampler = VK_NULL_HANDLE
+	};
+	VkWriteDescriptorSet writeDset = {
+		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+		.pNext = NULL,
+		.descriptorCount = 1,
+		.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+		.dstSet = set,
+		.dstBinding = 0,
+		.pImageInfo = &imageInfo
+	};
+	vkUpdateDescriptorSets(engine->device, 1, &writeDset, 0, NULL);
+	VkPipelineLayoutCreateInfo pLayoutCI = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+		.pNext = NULL,
+		.pushConstantRangeCount = 0,
+		.setLayoutCount = 1,
+		.pSetLayouts = &setLayout,
+		.flags = 0
+	};
+	VkPipelineLayout pLayout = VK_NULL_HANDLE;
+	vkCreatePipelineLayout(engine->device, &pLayoutCI, NULL, &pLayout);
+	VkPipeline computePipeline = VK_NULL_HANDLE;
+	VkShaderModule shaderModule = VK_NULL_HANDLE;
+
+	FILE *shaderFile = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/gradient.spv", "rb");
+	ERR_CHECK(shaderFile != NULL, BAD_PATH, 0);
+	fseek(shaderFile, 0, SEEK_END);
+	size_t size = ftell(shaderFile);
+	char *shaderCode = malloc(sizeof(char) * size);
+	fseek(shaderFile, 0, SEEK_SET);
+	fread(shaderCode, sizeof(char), size, shaderFile);
+	fclose(shaderFile);
+
+	VkShaderModuleCreateInfo shaderModuleCI = {
+		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+		.pNext = NULL,
+		.codeSize = size,
+		.pCode = shaderCode
+	};
+
+	vkCreateShaderModule(engine->device, &shaderModuleCI, NULL, &shaderModule);
+
+	VkPipelineShaderStageCreateInfo pSSCI = {
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+		.pNext = NULL,
+		.stage = VK_SHADER_STAGE_COMPUTE_BIT,
+		.module = shaderModule,
+		.pName = "main",
+	};
+
+	VkComputePipelineCreateInfo computePCI = {
+		.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+		.pNext = NULL,
+		.layout = pLayout,
+		.stage = pSSCI,
+	};
+	vkCreateComputePipelines(engine->device, NULL, 1, &computePCI, NULL, &computePipeline);
+	vkBeginCommandBuffer(cmdBuff, &beginInfo);
+	vkCmdBindDescriptorSets(cmdBuff, VK_PIPELINE_BIND_POINT_COMPUTE, pLayout, 0, 1, &set, 0, NULL);
+	vkCmdBindPipeline(cmdBuff, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
+
+	
+
+	vkCmdDispatch(cmdBuff, ceil((double)engine->renderImages[engine->cur_frame].imageExtent.width/16), ceil((double)engine->renderImages[engine->cur_frame].imageExtent.height/16), 1);
+
+	vkEndCommandBuffer(cmdBuff);
+
+	cmdSubmitInfo.commandBuffer = cmdBuff;
+
+	signalInfo.semaphore = engine->tmpSemaphore[engine->cur_frame];
+	VkSemaphoreSubmitInfo waitInfo = {
+		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+		.deviceIndex = 0,
+		.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+		.semaphore = engine->frameReadySemaphore[engine->cur_frame]
+	};
+
+	queueSubmitInfo.waitSemaphoreInfoCount = 1;
+	queueSubmitInfo.pWaitSemaphoreInfos = &waitInfo;
+	VkFenceCreateInfo badFenceCI = {
+		.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+		.flags = 0,
+		.pNext = NULL
+	};
+	VkFence badFence = VK_NULL_HANDLE;
+	vkCreateFence(engine->device, &badFenceCI, NULL, &badFence);
+	vkQueueSubmit2(engine->compute.queue, 1, &queueSubmitInfo, badFence);
+
+	res = vkWaitForFences(engine->device, 1, &badFence, true, 1000000000);
+	vkDestroyFence(engine->device, badFence, NULL);
+	vkDestroyPipeline(engine->device, computePipeline, NULL);
+	vkDestroyShaderModule(engine->device, shaderModule, NULL);
+	vkDestroyPipelineLayout(engine->device, pLayout, NULL);
+	vkDestroyDescriptorPool(engine->device, dPool, NULL);
+	vkDestroyDescriptorSetLayout(engine->device, setLayout, NULL);
+	vkResetCommandPool(engine->device, engine->compute.pool, 0);
+
 	return ENGINE_RESULT_SUCCESS;
 }
 EngineResult EngineDrawEnd(Engine *engine) {
@@ -624,7 +793,7 @@ EngineResult EngineDrawEnd(Engine *engine) {
 			.deviceIndex = 0,
 			.pNext = NULL,
 			.stageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-			.semaphore = engine->frameReadySemaphore[engine->cur_frame]
+			.semaphore = engine->tmpSemaphore[engine->cur_frame]
 		}
 	}, 					
 	signalSemaphoreInfo = {
@@ -661,7 +830,6 @@ EngineResult EngineDrawEnd(Engine *engine) {
 	updateCurrentFrame_(engine);
 	return ENGINE_RESULT_SUCCESS;
 }
-
 EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI, uintptr_t *vkInstance) {
 	Engine *engine = malloc(sizeof(Engine));
 	*engine_instance = engine;
@@ -718,7 +886,6 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 	debug_msg("picking physical device\n");
 	EngineResult eRes = findSuitablePhysicalDevice(physicalDevices, physicalDeviceCount, engine);
 	ERR_CHECK(eRes.EngineCode == SUCCESS, eRes.EngineCode, eRes.VulkanCode);
-	debug_msg("Physical Device Chosen\n");
 	free(physicalDevices);
 
 	engine->swapchainImageCount = engine->swapchainDetails.capabilities.minImageCount + 1;
@@ -840,13 +1007,14 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 		ERR_CHECK(res == VK_SUCCESS, CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
 		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->bufferCopySemaphore[i]);
 		ERR_CHECK(res == VK_SUCCESS, CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
+		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->tmpSemaphore[i]);
+		ERR_CHECK(res == VK_SUCCESS, CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
 		res = vkCreateFence(engine->device, &fenceCI, NULL, &engine->frameFence[i]);
 		ERR_CHECK(res == VK_SUCCESS, CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
 	}
 	engine->cur_frame = 0;
 	return ENGINE_RESULT_SUCCESS;
 }
-
 void EngineDestroy(Engine *engine) {
 	vkDeviceWaitIdle(engine->device);
 	vmaDestroyAllocator(engine->allocator);
@@ -854,6 +1022,7 @@ void EngineDestroy(Engine *engine) {
 		vkDestroySemaphore(engine->device, engine->swapchainSemaphores[i], NULL);
 		vkDestroySemaphore(engine->device, engine->frameReadySemaphore[i], NULL);
 		vkDestroySemaphore(engine->device, engine->bufferCopySemaphore[i], NULL);
+		vkDestroySemaphore(engine->device, engine->tmpSemaphore[i], NULL);
 		vkDestroyFence(engine->device, engine->frameFence[i], NULL);
 	}
 
