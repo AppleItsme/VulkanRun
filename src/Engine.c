@@ -225,7 +225,6 @@ void ImageCopy(VkCommandBuffer cmd, VkImage src, VkImage dst, VkExtent2D srcSize
 	vkCmdBlitImage2(cmd, &blitImageInfo);
 }
 
-
 EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t deviceCount, Engine *engine) {
 	size_t queueMemSize = 0,
 			extensionsMemSize = 0,
@@ -238,7 +237,7 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 	deviceStats bestDeviceStats = {.point = 0, .device = VK_NULL_HANDLE};
 
 	for(int i = 0; i < deviceCount; i++) {
-		deviceStats cur_deviceStats = {.point = 0, .device = devices[i]};
+		deviceStats cur_deviceStats = {.point = 0, .device = devices[i], .supportsRayTracing = false};
 		VkPhysicalDeviceProperties props = {0};
 		vkGetPhysicalDeviceProperties(devices[i], &props);
 		debug_msg("Device %d: %s\n", i, props.deviceName);
@@ -314,23 +313,27 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		size_t found = 0, rayTraceSupport = 0;
 		for(int j = 0; j < extensionCount; j++) {
 			for(int k = 0; k < MandatoryDeviceExtensionsCount; k++) {
-				if(strcmp(deviceExtensions[k], extensionProps[j].extensionName)) {
+				if(!strcmp(deviceExtensions[k], extensionProps[j].extensionName)) {
+					debug_msg("\tFound extension: %s\n", extensionProps[j].extensionName);
 					found++;
 					break;
 				}
 			}
 			for(int k = MandatoryDeviceExtensionsCount; k < ARR_SIZE(deviceExtensions); k++) {
-				if(strcmp(deviceExtensions[k], extensionProps[j].extensionName)) {
+				if(!strcmp(deviceExtensions[k], extensionProps[j].extensionName)) {
+					debug_msg("\tFound extension: %s\n", extensionProps[j].extensionName);
 					rayTraceSupport++;
+					break;
 				}
 			}
 		}
 		if(found < MandatoryDeviceExtensionsCount) {
 			continue;
 		}
-
 		if(rayTraceSupport == ARR_SIZE(deviceExtensions) - MandatoryDeviceExtensionsCount) {
+			debug_msg("\tSupports raytracing\n");
 			cur_deviceStats.point++;
+			cur_deviceStats.supportsRayTracing = true;
 		}
 
 		size_t formatCount = 0;
@@ -357,9 +360,10 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		if(!goodFormat)
 			continue;
 		cur_deviceStats.point++; //make it strictly better than a 0 point
-		if(props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+		if(props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
 			cur_deviceStats.point++;
 		}
+		debug_msg("\tDevice Passed with points: %d\n", cur_deviceStats.point);
 		if(cur_deviceStats.point > bestDeviceStats.point) {
 			bestDeviceStats = cur_deviceStats;
 		}
@@ -759,6 +763,7 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 	engine->swapchainImageCount = engine->swapchainDetails.capabilities.minImageCount + 1;
 
 	float queuePriority = 1;
+	debug_msg("Graphics queue index: %d\nCompute queue index: %d\nPresentation queue index: %d\n", engine->graphics.index, engine->compute.index, engine->presentation.index);
 	uint32_t queueI[] = {engine->graphics.index, engine->compute.index, engine->presentation.index};
 	uint32_t uniqueQueueI[ARR_SIZE(queueI)] = {engine->graphics.index};
 
@@ -793,6 +798,9 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 		uniqueQueueI[queueCI_len] = queueI[i];
 		queueCI_len++; 
 	}
+	for(int i = 0; i < queueCI_len; i++) {
+		debug_msg("unique index %d: %d\n", i, uniqueQueueI[i]);
+	}
 
 	VkPhysicalDeviceVulkan12Features desiredFeatures12 = {
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
@@ -813,7 +821,7 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 	};
 	VkDeviceCreateInfo deviceCI = {
 		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-		.enabledExtensionCount = engine->hardwareRayTracing ? MandatoryDeviceExtensionsCount : ARR_SIZE(deviceExtensions),
+		.enabledExtensionCount = engine->hardwareRayTracing ? ARR_SIZE(deviceExtensions) : MandatoryDeviceExtensionsCount,
 		.ppEnabledExtensionNames = deviceExtensions,
 		.queueCreateInfoCount = queueCI_len,
 		.pQueueCreateInfos = queueCI,
@@ -826,9 +834,9 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 		.enabledLayerCount = 0,
 		#endif
 	};
-
 	res = vkCreateDevice(engine->physicalDevice, &deviceCI, NULL, &engine->device);
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_DEVICE_CREATION_FAILED, res);
+	debug_msg("Device created\n");
 
 	CreateQueue(engine, &engine->graphics);
 	CreateQueue(engine, &engine->compute);
@@ -881,6 +889,7 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 		ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
 	}
 	engine->cur_frame = 0;
+	debug_msg("Initialisation complete\n");
 	return ENGINE_RESULT_SUCCESS;
 }
 void EngineDestroy(Engine *engine) {
@@ -982,7 +991,7 @@ EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes,
 			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT //consider ALL_SHADERS tho
 		};
 		poolSizes[i] = (VkDescriptorPoolSize) {
-			.descriptorCount = datatypes[i].length,
+			.descriptorCount = datatypes[i].length * FRAME_OVERLAP,
 			.type = type
 		};
 	}
@@ -1017,8 +1026,8 @@ EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes,
 		.pSetLayouts = layouts
 	};	
 	res = vkAllocateDescriptorSets(engine->device, &allocateInfo, engine->descriptorSet);
-	debug_msg("Descriptor set created\n");
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_DATASET_DECLARATION_FAILED, res);
+	debug_msg("Descriptor set created\n");
 	return ENGINE_RESULT_SUCCESS;
 }
 void EngineWriteData(Engine *engine, EngineWriteDataInfo info) {
@@ -1111,7 +1120,6 @@ EngineResult EngineEndCommand(Engine *engine, EngineCommand cmd, EngineSemaphore
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_SUBMIT_TO_GPU, res);
 	return ENGINE_RESULT_SUCCESS;
 }
-
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore) {
 	VkSemaphoreCreateInfo semaphoreCI = {
 		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,

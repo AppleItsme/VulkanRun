@@ -53,8 +53,12 @@ int main() {
 		exit(-1);
 	}
 	glfwCreateWindowSurface(vkInstance, window, NULL, &surface);
-	EngineFinishSetup(engine_instance, surface);
-	
+	res = EngineFinishSetup(engine_instance, surface);
+	if(res.EngineCode != ENGINE_SUCCESS) {
+		printf("Setup failed: %d %d\n", res.EngineCode, res.VulkanCode);
+		exit(-1);
+	}
+
 	glfwGetFramebufferSize(window, &bufferSize.width, &bufferSize.height);
 	glfwSetWindowSizeCallback(window, window_size_callback);
 	res = EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height, renderImages);
@@ -67,7 +71,12 @@ int main() {
 		.length = 1,
 		.type = ENGINE_IMAGE
 	};	
-	EngineDeclareDataSet(engine_instance, &dType, 1);
+	
+	res = EngineDeclareDataSet(engine_instance, &dType, 1);
+	if(res.EngineCode != ENGINE_SUCCESS) {
+		printf("Dataset declaration failed!: %d, %d\n", res.EngineCode, res.VulkanCode);
+		exit(-1);
+	}
 	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/gradient.spv", "rb");
 	if(shader == NULL) {
 		printf("womp womp bad path\n");
