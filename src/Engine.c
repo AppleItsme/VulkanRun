@@ -50,6 +50,8 @@ struct Engine {
 
 	VkExtent2D pixelResolution;
 
+	VkDeviceSize deviceMinimumOffset;
+
 	uint32_t cur_frame, cur_swapchainIndex;
 	VmaAllocator allocator;
 
@@ -153,6 +155,7 @@ typedef struct {
 	bool supportsRayTracing;
 	VkSurfaceFormatKHR format;
 	VkPhysicalDevice device;
+	VkDeviceSize minimumOffset;
 } deviceStats;
 
 VkImageCreateInfo imageCreateInfo(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent) {
@@ -360,10 +363,11 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		if(!goodFormat)
 			continue;
 		cur_deviceStats.point++; //make it strictly better than a 0 point
-		if(props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+		if(props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
 			cur_deviceStats.point++;
 		}
 		debug_msg("\tDevice Passed with points: %d\n", cur_deviceStats.point);
+		cur_deviceStats.minimumOffset = props.limits.minStorageBufferOffsetAlignment;
 		if(cur_deviceStats.point > bestDeviceStats.point) {
 			bestDeviceStats = cur_deviceStats;
 		}
@@ -1036,7 +1040,11 @@ void EngineWriteData(Engine *engine, EngineWriteDataInfo info) {
 		.imageView = info.content.image.view,
 		.sampler = VK_NULL_HANDLE
 	};
-	VkDescriptorBufferInfo bufferInfo = {0};
+	VkDescriptorBufferInfo bufferInfo = {
+		.buffer = info.content.buffer._buffer,
+		.offset = 0,
+		.range = VK_WHOLE_SIZE
+	};
 	VkWriteDescriptorSet writeSet = {
 		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		.pNext = NULL,
@@ -1045,6 +1053,7 @@ void EngineWriteData(Engine *engine, EngineWriteDataInfo info) {
 		.dstArrayElement = info.startingIndex,
 		.descriptorCount = info.endIndex - info.startingIndex + 1,
 	};
+	
 	switch(info.type) {
 	case ENGINE_BUFFER:
 		writeSet.pBufferInfo = &bufferInfo;
@@ -1126,9 +1135,37 @@ EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore) {
 		.pNext = NULL,
 		.flags = VK_SEMAPHORE_TYPE_BINARY
 	};
-	vkCreateSemaphore(engine->device, &semaphoreCI, NULL, semaphore);
+	res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, semaphore);
+	ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
 	return ENGINE_RESULT_SUCCESS;
 }
 void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore) {
 	vkDestroySemaphore(engine->device, semaphore, NULL);
+}
+
+EngineResult EngineCreateBuffer(Engine *engine, EngineBuffer *buffer) {
+	VkBufferCreateInfo buffCI = {
+		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+		.pNext = NULL,
+		.pQueueFamilyIndices = &engine->compute.index,
+		.queueFamilyIndexCount = 1,
+		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		.size = buffer->length * buffer->elementByteSize,
+		.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+	};
+	VmaAllocationCreateInfo allocCI = {
+		.usage = VMA_MEMORY_USAGE_CPU_TO_GPU
+	};
+	res = vmaCreateBuffer(engine->allocator, &buffCI, &allocCI, &buffer->_buffer, &buffer->_allocation, NULL);
+	ERR_CHECK(res == VK_SUCCESS, ENGINE_BUFFER_CREATION_FAILED, res);
+	debug_msg("Buffer created\n");
+	buffer->data = malloc(buffer->elementByteSize * buffer->length);
+	vmaMapMemory(engine->allocator, buffer->_allocation, &buffer->data);
+	return ENGINE_RESULT_SUCCESS;
+}
+
+void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer) {
+	vmaUnmapMemory(engine->allocator, buffer._allocation);
+	free(buffer.data);
+	vmaDestroyBuffer(engine->allocator, buffer._buffer, buffer._allocation);
 }

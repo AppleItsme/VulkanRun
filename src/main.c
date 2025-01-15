@@ -66,13 +66,20 @@ int main() {
 		printf("swapchain failed\n %d", res.VulkanCode);
 		exit(-1);
 	}
-	EngineDataTypeInfo dType = {
-		.bindingIndex = 0,
-		.length = 1,
-		.type = ENGINE_IMAGE
+	EngineDataTypeInfo dTypes[] = {
+		{
+			.bindingIndex = 0,
+			.length = 1,
+			.type = ENGINE_IMAGE
+		},
+		{
+			.bindingIndex = 1,
+			.length = 1,
+			.type = ENGINE_BUFFER
+		}
 	};	
 	
-	res = EngineDeclareDataSet(engine_instance, &dType, 1);
+	res = EngineDeclareDataSet(engine_instance, dTypes, sizeof(dTypes)/sizeof(dTypes[0]));
 	if(res.EngineCode != ENGINE_SUCCESS) {
 		printf("Dataset declaration failed!: %d, %d\n", res.EngineCode, res.VulkanCode);
 		exit(-1);
@@ -94,9 +101,12 @@ int main() {
 		.code = shaderCode
 	};
 
-	EngineLoadShaders(engine_instance, &shaderInfo, 1);
+	res = EngineLoadShaders(engine_instance, &shaderInfo, 1);
+	if(res.EngineCode != ENGINE_SUCCESS) {
+		printf("Could not load shaders: %d %d\n", res.EngineCode, res.VulkanCode);
+		exit(-1);
+	}
 	free(shaderCode);
-	printf("loop begins!\n");
 
 	EngineSemaphore drawWaitSemaphore[2] = {0};
 	EngineSemaphore commandDoneSemaphore[2] = {0};
@@ -104,6 +114,20 @@ int main() {
 		EngineCreateSemaphore(engine_instance, &commandDoneSemaphore[i]);
 	}
 
+	EngineBuffer buffer = {
+		.elementByteSize = sizeof(float),
+		.length = 2,
+	};
+	res = EngineCreateBuffer(engine_instance, &buffer);
+	if(res.EngineCode != ENGINE_SUCCESS) {
+		printf("Could not create buffer: %d %d\n", res.EngineCode, res.VulkanCode);
+		exit(-1);
+	}
+
+	glfwSetTime(0);
+
+	float arr[2] = {100, 120};
+	printf("loop begins!\n");
 	while(!glfwWindowShouldClose(window)) {
 		EngineColor Color = {0, 0, 1, 1};
 		res = EngineDrawStart(engine_instance, Color, &drawWaitSemaphore[EngineGetFrame(engine_instance)]);
@@ -119,7 +143,21 @@ int main() {
 			.content.image = renderImages[EngineGetFrame(engine_instance)],
 		};
 		EngineWriteData(engine_instance, &dataInfo);
-
+		
+		float tmp[2] = {arr[0], arr[1]};
+		float time = glfwGetTime();
+		tmp[0] += sinf(time) * 10;
+		tmp[1] += cosf(time) * 20;
+		memcpy(buffer.data, tmp, sizeof(float) * 2);
+		dataInfo = (EngineWriteDataInfo) {
+			.binding = 1,
+			.startingIndex = 0,
+			.endIndex = 0,
+			.type = ENGINE_BUFFER,
+			.content.buffer = buffer
+		};
+		EngineWriteData(engine_instance, &dataInfo);
+		
 		EngineCommand cmd = 0;
 		EngineStartCommand(engine_instance, &cmd);
 		EngineShaderRunInfo runInfo = {
@@ -136,6 +174,7 @@ int main() {
 		}
 		glfwPollEvents();
 	}
+	EngineDestroyBuffer(engine_instance, buffer);
 	EngineSwapchainDestroy(engine_instance);
 	for(int i = 0; i < 2; i++) {
 		EngineDestroySemaphore(engine_instance, commandDoneSemaphore[i]);

@@ -35,6 +35,7 @@ typedef struct {
         ENGINE_IMAGE_VIEW_FAILED,
 
         ENGINE_CANNOT_CREATE_SYNCHRONISING_VARIABLES,
+        ENGINE_BUFFER_CREATION_FAILED,
 
         ENGINE_DEBUG_INFO_NOT_FOUND,
         ENGINE_DEBUG_CREATION_FAILED,
@@ -76,12 +77,20 @@ typedef struct {
 } EngineImage;
 
 typedef struct {
+    size_t length;
+    uintptr_t _buffer, _allocation;
+    size_t elementByteSize;
+    void *data;
+} EngineBuffer;
+
+typedef struct {
     uint32_t startingIndex, 
             endIndex,
             binding;
     EngineDataType type;
     union {
         EngineImage image;
+        EngineBuffer buffer;
     } content;
 } EngineWriteDataInfo;
 
@@ -111,6 +120,9 @@ void EngineWriteData(Engine *engine, EngineWriteDataInfo *info);
 
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore);
 void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore);
+
+EngineResult EngineCreateBuffer(Engine *engine, EngineBuffer *engineBuffer);
+void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer);
 
 /*
     1. Create VkDescriptorSetLayoutBindings for every type of object you want in descriptor set
