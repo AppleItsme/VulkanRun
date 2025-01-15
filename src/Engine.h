@@ -13,7 +13,8 @@ typedef struct {
 
 typedef struct Engine Engine;
 typedef enum {
-    ENGINE_BUFFER,
+    ENGINE_BUFFER_STORAGE,
+    ENGINE_BUFFER_UNIFORM,
     ENGINE_IMAGE,
 } EngineDataType;
 
@@ -96,6 +97,10 @@ typedef struct {
 
 typedef uintptr_t EngineSemaphore;
 typedef uintptr_t EngineCommand;
+typedef enum {
+    ENGINE_COMMAND_REUSABLE,
+    ENGINE_COMMAND_ONE_TIME
+} EngineCommandRecordingType;
 
 #define MAKE_VERSION(major, minor, patch) ((((uint32_t)(major)) << 22U) | (((uint32_t)(minor)) << 12U) | ((uint32_t)(patch)))
 EngineResult EngineInit(Engine **engine, EngineCI engineCI, uintptr_t *vkInstance);
@@ -111,9 +116,13 @@ EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemap
 EngineResult EngineDrawEnd(Engine *engine, EngineSemaphore *waitSemaphore);
 
 EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t shaderCount);
-EngineResult EngineStartCommand(Engine *engine, EngineCommand *cmd);
+EngineResult EngineCreateCommand(Engine *engine, EngineCommand *cmd);
+EngineResult EngineCommandRecordingStart(Engine *engine, EngineCommand cmd, EngineCommandRecordingType type);
+EngineResult EngineCommandRecordingEnd(Engine *engine, EngineCommand cmd);
+EngineResult EngineSubmitCommand(Engine *engine, EngineCommand cmd, EngineSemaphore *waitSemaphore, EngineSemaphore *signalSemaphore);
+void EngineDestroyCommand(Engine *engine, EngineCommand cmd);
+
 void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShaderRunInfo runInfo);
-EngineResult EngineEndCommand(Engine *engine, EngineCommand cmd, EngineSemaphore *waitSemaphore, EngineSemaphore *signalSemaphore);
 
 EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount);
 void EngineWriteData(Engine *engine, EngineWriteDataInfo *info);
@@ -121,7 +130,7 @@ void EngineWriteData(Engine *engine, EngineWriteDataInfo *info);
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore);
 void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore);
 
-EngineResult EngineCreateBuffer(Engine *engine, EngineBuffer *engineBuffer);
+EngineResult EngineCreateBuffer(Engine *engine, EngineBuffer *engineBuffer, EngineDataType type);
 void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer);
 
 /*

@@ -75,7 +75,7 @@ int main() {
 		{
 			.bindingIndex = 1,
 			.length = 1,
-			.type = ENGINE_BUFFER
+			.type = ENGINE_BUFFER_UNIFORM
 		}
 	};	
 	
@@ -118,7 +118,7 @@ int main() {
 		.elementByteSize = sizeof(float),
 		.length = 2,
 	};
-	res = EngineCreateBuffer(engine_instance, &buffer);
+	res = EngineCreateBuffer(engine_instance, &buffer, ENGINE_BUFFER_UNIFORM);
 	if(res.EngineCode != ENGINE_SUCCESS) {
 		printf("Could not create buffer: %d %d\n", res.EngineCode, res.VulkanCode);
 		exit(-1);
@@ -153,20 +153,22 @@ int main() {
 			.binding = 1,
 			.startingIndex = 0,
 			.endIndex = 0,
-			.type = ENGINE_BUFFER,
+			.type = ENGINE_BUFFER_UNIFORM,
 			.content.buffer = buffer
 		};
 		EngineWriteData(engine_instance, &dataInfo);
 		
 		EngineCommand cmd = 0;
-		EngineStartCommand(engine_instance, &cmd);
+		EngineCreateCommand(engine_instance, &cmd);
+		EngineCommandRecordingStart(engine_instance, cmd, ENGINE_COMMAND_ONE_TIME);
 		EngineShaderRunInfo runInfo = {
 			.groupSizeX = ceilf((float)bufferSize.width/16),
 			.groupSizeY = ceilf((float)bufferSize.height/16),
 			.groupSizeZ = 1
 		};
 		EngineRunShader(engine_instance, cmd, 0, runInfo);
-		EngineEndCommand(engine_instance, cmd, &drawWaitSemaphore[EngineGetFrame(engine_instance)], &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
+		EngineCommandRecordingEnd(engine_instance, cmd);
+		EngineSubmitCommand(engine_instance, cmd, &drawWaitSemaphore[EngineGetFrame(engine_instance)], &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
 		res = EngineDrawEnd(engine_instance, &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
 		if(res.EngineCode != ENGINE_SUCCESS) {
 			printf("drawend failed\n %d", res.VulkanCode);

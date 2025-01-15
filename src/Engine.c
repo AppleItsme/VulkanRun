@@ -980,12 +980,15 @@ EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes,
 	for(int i = 0; i < datatypeCount; i++) {
 		VkDescriptorType type = 0;
 		switch(datatypes[i].type) {
-		case ENGINE_BUFFER:
-			type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-			break;
-		case ENGINE_IMAGE:
-			type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-			break;
+			case ENGINE_BUFFER_STORAGE:
+				type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+				break;
+			case ENGINE_BUFFER_UNIFORM:
+				type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+				break;
+			case ENGINE_IMAGE:
+				type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+				break;
 		}
 		bindings[i] = (VkDescriptorSetLayoutBinding) {
 			.binding = datatypes[i].bindingIndex,
@@ -1055,19 +1058,23 @@ void EngineWriteData(Engine *engine, EngineWriteDataInfo info) {
 	};
 	
 	switch(info.type) {
-	case ENGINE_BUFFER:
-		writeSet.pBufferInfo = &bufferInfo;
-		writeSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		break;
-	case ENGINE_IMAGE:
-		writeSet.pImageInfo = &imageInfo;
-		writeSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-		break;
+		case ENGINE_BUFFER_STORAGE:
+			writeSet.pBufferInfo = &bufferInfo;
+			writeSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+			break;
+		case ENGINE_BUFFER_UNIFORM:
+			writeSet.pBufferInfo = &bufferInfo;
+			writeSet.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			break;
+		case ENGINE_IMAGE:
+			writeSet.pImageInfo = &imageInfo;
+			writeSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+			break;
 	}
 	vkUpdateDescriptorSets(engine->device, 1, &writeSet, 0, NULL);
 }
 
-EngineResult EngineStartCommand(Engine *engine, EngineCommand *cmd) {
+EngineResult EngineCreateCommand(Engine *engine, EngineCommand *cmd) {
 	VkCommandBufferAllocateInfo allocateInfo = {
 		.commandBufferCount = 1,
 		.commandPool = engine->compute.pool,
@@ -1077,23 +1084,31 @@ EngineResult EngineStartCommand(Engine *engine, EngineCommand *cmd) {
 	};
 	res = vkAllocateCommandBuffers(engine->device, &allocateInfo, cmd);
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_START_COMMAND, res);
+}
+EngineResult EngineCommandRecordingStart(Engine *engine, EngineCommand cmd, EngineCommandRecordingType type) {
 	VkCommandBufferBeginInfo beginInfo = {
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 		.pNext = NULL,
 		.pInheritanceInfo = NULL,
-		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
 	};
-	res = vkBeginCommandBuffer(*cmd, &beginInfo);
+	switch(type) {
+		case ENGINE_COMMAND_ONE_TIME:
+			beginInfo.flags |= VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+			break;
+		case ENGINE_COMMAND_REUSABLE:
+			beginInfo.flags |= VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+			break;
+	}
+	res = vkBeginCommandBuffer(cmd, &beginInfo);
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_START_COMMAND, res);
-	vkCmdBindDescriptorSets(*cmd, VK_PIPELINE_BIND_POINT_COMPUTE, engine->pipelineLayout, 0, 1, &engine->descriptorSet[engine->cur_frame], 0, NULL);
+	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, engine->pipelineLayout, 0, 1, &engine->descriptorSet[engine->cur_frame], 0, NULL);
 }
-void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShaderRunInfo runInfo) {
-	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, engine->pipelines[index]);
-	vkCmdDispatch(cmd, runInfo.groupSizeX, runInfo.groupSizeY, runInfo.groupSizeZ);
-}
-EngineResult EngineEndCommand(Engine *engine, EngineCommand cmd, EngineSemaphore *waitSemaphore, EngineSemaphore *signalSemaphore) {
+EngineResult EngineCommandRecordingEnd(Engine *engine, EngineCommand cmd) {
 	res = vkEndCommandBuffer(cmd);
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_PREPARE_FOR_SUBMISSION, res);	
+	return ENGINE_RESULT_SUCCESS;
+}
+EngineResult EngineSubmitCommand(Engine *engine, EngineCommand cmd, EngineSemaphore *waitSemaphore, EngineSemaphore *signalSemaphore) {
 	VkCommandBufferSubmitInfo cmdSubmitInfo = {
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
 		.commandBuffer = cmd,
@@ -1129,6 +1144,16 @@ EngineResult EngineEndCommand(Engine *engine, EngineCommand cmd, EngineSemaphore
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_SUBMIT_TO_GPU, res);
 	return ENGINE_RESULT_SUCCESS;
 }
+void EngineDestroyCommand(Engine *engine, EngineCommand cmd) {
+	vkQueueWaitIdle(engine->compute.queue);
+	vkResetCommandBuffer(cmd, NULL);
+}
+
+void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShaderRunInfo runInfo) {
+	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, engine->pipelines[index]);
+	vkCmdDispatch(cmd, runInfo.groupSizeX, runInfo.groupSizeY, runInfo.groupSizeZ);
+}
+
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore) {
 	VkSemaphoreCreateInfo semaphoreCI = {
 		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
@@ -1143,7 +1168,7 @@ void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore) {
 	vkDestroySemaphore(engine->device, semaphore, NULL);
 }
 
-EngineResult EngineCreateBuffer(Engine *engine, EngineBuffer *buffer) {
+EngineResult EngineCreateBuffer(Engine *engine, EngineBuffer *buffer, EngineDataType type) {
 	VkBufferCreateInfo buffCI = {
 		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
 		.pNext = NULL,
@@ -1151,21 +1176,27 @@ EngineResult EngineCreateBuffer(Engine *engine, EngineBuffer *buffer) {
 		.queueFamilyIndexCount = 1,
 		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
 		.size = buffer->length * buffer->elementByteSize,
-		.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
 	};
+	switch(type) {
+		case ENGINE_BUFFER_STORAGE:
+			buffCI.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+			break;
+		case ENGINE_BUFFER_UNIFORM:
+			buffCI.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+			break;
+	}
+
 	VmaAllocationCreateInfo allocCI = {
 		.usage = VMA_MEMORY_USAGE_CPU_TO_GPU
 	};
 	res = vmaCreateBuffer(engine->allocator, &buffCI, &allocCI, &buffer->_buffer, &buffer->_allocation, NULL);
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_BUFFER_CREATION_FAILED, res);
-	debug_msg("Buffer created\n");
-	buffer->data = malloc(buffer->elementByteSize * buffer->length);
-	vmaMapMemory(engine->allocator, buffer->_allocation, &buffer->data);
+	res = vmaMapMemory(engine->allocator, buffer->_allocation, &buffer->data);
+	ERR_CHECK(res == VK_SUCCESS, ENGINE_BUFFER_CREATION_FAILED, res);
 	return ENGINE_RESULT_SUCCESS;
 }
-
 void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer) {
+	vkQueueWaitIdle(engine->compute.queue);
 	vmaUnmapMemory(engine->allocator, buffer._allocation);
-	free(buffer.data);
 	vmaDestroyBuffer(engine->allocator, buffer._buffer, buffer._allocation);
 }
