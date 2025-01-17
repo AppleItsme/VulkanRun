@@ -9,7 +9,9 @@ layout(rgba16f, set = 0, binding = 0) uniform image2D renderScreen;
 layout(std140, set = 0, binding = 1) readonly buffer _ {
     vec3 position;
     float radius;
-} object;
+    vec3 sunlight;
+    float power;
+} scene;
 layout(set = 0, binding = 2) uniform _ {
     mat4 vs;
     mat4 sv;
@@ -44,9 +46,9 @@ void main() {
     //shoot a ray
     vec3 rayDir = rayGenerate();
     float a = dot(rayDir, rayDir);
-    float b = -2*dot(rayDir, object.position);
-    float c = dot(object.position, object.position) - object.radius * object.radius;
-    float discriminant = pow(-2*dot(rayDir, object.position), 2)-4*dot(rayDir, rayDir)*(dot(object.position, object.position)-pow(object.radius, 2));
+    float b = -2*dot(rayDir, scene.position);
+    float c = dot(scene.position, scene.position) - scene.radius * scene.radius;
+    float discriminant = pow(-2*dot(rayDir, scene.position), 2)-4*dot(rayDir, rayDir)*(dot(scene.position, scene.position)-pow(scene.radius, 2));
     if(discriminant < 0) {
         return;
     }
@@ -59,6 +61,8 @@ void main() {
     if(pointPosition.z < 0.1) {
         return;
     }
-    vec4 color = vec4(1,0,2*pointPosition.z,1);
+    vec3 normal = normalize(pointPosition-scene.position);
+    float luminosity = clamp(-dot(normal, scene.sunlight), 0, 1) * scene.power;
+    vec4 color = vec4(1, 0, 0, 1) * luminosity;
     imageStore(renderScreen, ivec2(gl_GlobalInvocationID.xy), color);
 }

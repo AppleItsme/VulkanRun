@@ -134,7 +134,7 @@ int main() {
 
 	EngineBuffer buffer = {
 		.elementByteSize = sizeof(float),
-		.length = 4,
+		.length = 4+4,
 	};
 	EngineCreateBuffer(engine_instance, &buffer, ENGINE_BUFFER_STORAGE);
 	EngineCreateBuffer(engine_instance, &VSMatrices, ENGINE_BUFFER_UNIFORM);
@@ -166,8 +166,11 @@ int main() {
 		EngineWriteData(engine_instance, &dataInfo);
 
 		float time = glfwGetTime();
-		float arr[4] = {0, 0, 1.5 + sinf(time), 0.25};
+		vec4 arr = {0, 0, 3 + sinf(time), 1};
 		memcpy(buffer.data, arr, sizeof(float) * 4);
+
+		vec4 rotatedSunlight = {-sinf(time), cosf(time), sinf(time), 2};
+		memcpy((float*)buffer.data+4, &rotatedSunlight, sizeof(float) * 4);
 		
 		dataInfo = (EngineWriteDataInfo) {
 			.binding = 1,
