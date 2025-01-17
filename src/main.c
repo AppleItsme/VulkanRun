@@ -87,23 +87,10 @@ int main() {
 	glfwGetFramebufferSize(window, &bufferSize.width, &bufferSize.height);
 	glfwSetWindowSizeCallback(window, window_size_callback);
 	EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height, renderImages);
-	EngineDataTypeInfo dTypes[] = {
-		{
-			.bindingIndex = 0,
-			.count = 1,
-			.type = ENGINE_IMAGE
-		},
-		{
-			.bindingIndex = 1,
-			.count = 1,
-			.type = ENGINE_BUFFER_STORAGE
-		}, 
-		{
-			.bindingIndex = 2,
-			.count = 1,
-			.type = ENGINE_BUFFER_UNIFORM
-		}
-	};	
+
+	size_t length = 0;
+	EngineDataTypeInfo dTypes[ENGINE_DATA_TYPE_INFO_LENGTH] = {0};
+	EngineGenerateDataTypeInfo(dTypes);
 	
 	res = EngineDeclareDataSet(engine_instance, dTypes, sizeof(dTypes)/sizeof(dTypes[0]));
 	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/raytrace.spv", "rb");

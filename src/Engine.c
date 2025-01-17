@@ -972,6 +972,24 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_SHADER_CREATION_FAILED, res);
 	return ENGINE_RESULT_SUCCESS;
 }
+
+inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo) {
+	dataTypeInfo[0] = (EngineDataTypeInfo) {
+		.bindingIndex = 0,
+		.count = 1,
+		.type = ENGINE_IMAGE
+	};
+	dataTypeInfo[1] = (EngineDataTypeInfo) {
+		.bindingIndex = 1,
+		.count = 1,
+		.type = ENGINE_BUFFER_STORAGE
+	};
+	dataTypeInfo[2] = (EngineDataTypeInfo) {
+		.bindingIndex = 2,
+		.count = 1,
+		.type = ENGINE_BUFFER_UNIFORM
+	};
+}
 EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount) {
 	VkDescriptorSetLayoutBinding *bindings = malloc(sizeof(VkDescriptorSetLayoutBinding) * datatypeCount);
 	VkDescriptorPoolSize *poolSizes = malloc(sizeof(VkDescriptorPoolSize) * datatypeCount);
@@ -1072,7 +1090,6 @@ void EngineWriteData(Engine *engine, EngineWriteDataInfo info) {
 	}
 	vkUpdateDescriptorSets(engine->device, 1, &writeSet, 0, NULL);
 }
-
 EngineResult EngineCreateCommand(Engine *engine, EngineCommand *cmd) {
 	VkCommandBufferAllocateInfo allocateInfo = {
 		.commandBufferCount = 1,
@@ -1147,12 +1164,10 @@ void EngineDestroyCommand(Engine *engine, EngineCommand cmd) {
 	vkQueueWaitIdle(engine->compute.queue);
 	vkResetCommandBuffer(cmd, NULL);
 }
-
 void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShaderRunInfo runInfo) {
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, engine->pipelines[index]);
 	vkCmdDispatch(cmd, runInfo.groupSizeX, runInfo.groupSizeY, runInfo.groupSizeZ);
 }
-
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore) {
 	VkSemaphoreCreateInfo semaphoreCI = {
 		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
@@ -1199,3 +1214,4 @@ void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer) {
 	vmaUnmapMemory(engine->allocator, buffer._allocation);
 	vmaDestroyBuffer(engine->allocator, buffer._buffer, buffer._allocation);
 }
+

@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <cglm/cglm.h>
 
 typedef struct {
     uint32_t appVersion;
@@ -124,6 +125,9 @@ void EngineDestroyCommand(Engine *engine, EngineCommand cmd);
 
 void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShaderRunInfo runInfo);
 
+#define ENGINE_DATA_TYPE_INFO_LENGTH 3
+
+extern inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo);
 EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount);
 void EngineWriteData(Engine *engine, EngineWriteDataInfo *info);
 
@@ -135,3 +139,37 @@ void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer);
 
 EngineResult EngineCreateImage(Engine *engine, EngineImage *engineImage);
 void EngineDestroyImage(Engine *engine, EngineImage engineImage);
+
+
+typedef vec4 EngineColor;
+
+typedef struct {
+    float roughness, refraction, luminosity;
+    EngineColor color;
+} EngineMaterial;
+
+typedef enum {
+    ENGINE_MESH_SPHERE,
+    ENGINE_MESH
+} EngineMeshType;
+
+typedef struct {
+    vec3 vertices[3];
+    vec3 textureCoords[3];
+    vec3 normals[3];
+    bool textured;
+} EngineTriangleData;
+
+typedef struct {
+    float radius;
+} EngineSphereData;
+
+typedef struct {
+    vec3 position;
+    EngineMaterial material;
+    EngineMeshType type;
+
+    EngineSphereData sphere;
+    size_t trianglesCount;
+    EngineTriangleData *triangles;
+} EngineMesh;
