@@ -21,7 +21,7 @@ typedef enum {
 
 typedef struct {
     EngineDataType type;
-    uint32_t bindingIndex, length;
+    uint32_t bindingIndex, count;
 } EngineDataTypeInfo;
 
 typedef struct {
@@ -133,12 +133,5 @@ void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore);
 EngineResult EngineCreateBuffer(Engine *engine, EngineBuffer *engineBuffer, EngineDataType type);
 void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer);
 
-/*
-    1. Create VkDescriptorSetLayoutBindings for every type of object you want in descriptor set
-    2. Create VkDescriptorSetLayout
-    3. Create command pool
-    4. create descriptor set
-    5. Create shader module(s)
-    6. Create pipeline layout
-    7. create pipeline
-*/
+EngineResult EngineCreateImage(Engine *engine, EngineImage *engineImage);
+void EngineDestroyImage(Engine *engine, EngineImage engineImage);

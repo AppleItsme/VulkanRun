@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <cglm/cglm.h>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -17,24 +18,56 @@ Engine *engine_instance = NULL;
 GLFWwindow *window = NULL;
 EngineImage renderImages[2];
 
+EngineBuffer VSMatrices = {
+	.elementByteSize = sizeof(float),
+	.length = 32,
+};
+
 struct {
 	uint32_t width, height;
 } bufferSize;
 
+bool isMinimised = false;
+bool wasMinimised = false;
+
+void sendValues() {
+	float aspectRatio = bufferSize.width/bufferSize.height;
+	mat4 vsMatrix = {
+		{(float)bufferSize.height/2, 0, 0, (float)bufferSize.width/2},
+		{0,-1 * (float)bufferSize.height/2, 0, (float)bufferSize.height/2},
+		{0,0,1,0},
+		{0,0,0,1}
+	};
+	glm_mat4_transpose(vsMatrix);
+	mat4 svMatrix = {0};
+	glm_mat4_inv(vsMatrix, svMatrix);
+	memcpy(VSMatrices.data, vsMatrix, sizeof(float) * 16);
+	memcpy((float*)VSMatrices.data + 16, svMatrix, sizeof(float) * 16);
+}
+
+
 void window_size_callback(GLFWwindow *window, int width, int height) {
 	glfwGetFramebufferSize(window, &bufferSize.width, &bufferSize.height);
-	EngineSwapchainDestroy(engine_instance);
-	res = EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height, renderImages);
-	if(res.EngineCode != ENGINE_SUCCESS) {
-		printf("swapchain failed: %d\n", res.VulkanCode);
-		exit(-1);
+	if(bufferSize.width == 0 || bufferSize.height == 0) {
+		isMinimised = true;
+		if(!wasMinimised) {
+			EngineSwapchainDestroy(engine_instance);
+			wasMinimised = true;
+		}
+		return;
 	}
+	isMinimised = false;
+	if(!isMinimised) {
+		if(!wasMinimised) {
+			EngineSwapchainDestroy(engine_instance);
+		}
+		res = EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height, renderImages);
+		wasMinimised = false;
+	}
+	sendValues();
 }
 
 int main() {
-	#ifndef NDEBUG
-		printf("DEBUG IS ON\n");
-	#endif
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -48,43 +81,32 @@ int main() {
 	engineCreateInfo.extensions = glfwGetRequiredInstanceExtensions(&engineCreateInfo.extensionsCount);
 	
 	uintptr_t surface = 0, vkInstance = 0;
-	res = EngineInit(&engine_instance, engineCreateInfo, &vkInstance);
-	if(res.EngineCode != ENGINE_SUCCESS) {
-		exit(-1);
-	}
+	EngineInit(&engine_instance, engineCreateInfo, &vkInstance);
 	glfwCreateWindowSurface(vkInstance, window, NULL, &surface);
-	res = EngineFinishSetup(engine_instance, surface);
-	if(res.EngineCode != ENGINE_SUCCESS) {
-		printf("Setup failed: %d %d\n", res.EngineCode, res.VulkanCode);
-		exit(-1);
-	}
-
+	EngineFinishSetup(engine_instance, surface);
 	glfwGetFramebufferSize(window, &bufferSize.width, &bufferSize.height);
 	glfwSetWindowSizeCallback(window, window_size_callback);
-	res = EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height, renderImages);
-	if(res.EngineCode != ENGINE_SUCCESS) {
-		printf("swapchain failed\n %d", res.VulkanCode);
-		exit(-1);
-	}
+	EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height, renderImages);
 	EngineDataTypeInfo dTypes[] = {
 		{
 			.bindingIndex = 0,
-			.length = 1,
+			.count = 1,
 			.type = ENGINE_IMAGE
 		},
 		{
 			.bindingIndex = 1,
-			.length = 1,
+			.count = 1,
+			.type = ENGINE_BUFFER_STORAGE
+		}, 
+		{
+			.bindingIndex = 2,
+			.count = 1,
 			.type = ENGINE_BUFFER_UNIFORM
 		}
 	};	
 	
 	res = EngineDeclareDataSet(engine_instance, dTypes, sizeof(dTypes)/sizeof(dTypes[0]));
-	if(res.EngineCode != ENGINE_SUCCESS) {
-		printf("Dataset declaration failed!: %d, %d\n", res.EngineCode, res.VulkanCode);
-		exit(-1);
-	}
-	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/gradient.spv", "rb");
+	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/raytrace.spv", "rb");
 	if(shader == NULL) {
 		printf("womp womp bad path\n");
 		exit(-1);
@@ -102,10 +124,6 @@ int main() {
 	};
 
 	res = EngineLoadShaders(engine_instance, &shaderInfo, 1);
-	if(res.EngineCode != ENGINE_SUCCESS) {
-		printf("Could not load shaders: %d %d\n", res.EngineCode, res.VulkanCode);
-		exit(-1);
-	}
 	free(shaderCode);
 
 	EngineSemaphore drawWaitSemaphore[2] = {0};
@@ -116,25 +134,28 @@ int main() {
 
 	EngineBuffer buffer = {
 		.elementByteSize = sizeof(float),
-		.length = 2,
+		.length = 4,
 	};
-	res = EngineCreateBuffer(engine_instance, &buffer, ENGINE_BUFFER_UNIFORM);
-	if(res.EngineCode != ENGINE_SUCCESS) {
-		printf("Could not create buffer: %d %d\n", res.EngineCode, res.VulkanCode);
-		exit(-1);
+	EngineCreateBuffer(engine_instance, &buffer, ENGINE_BUFFER_STORAGE);
+	EngineCreateBuffer(engine_instance, &VSMatrices, ENGINE_BUFFER_UNIFORM);
+
+	sendValues();
+	for(int i = 0; i < 16; i++) {
+		if(i != 0 && i % 4 == 0) {
+			printf("\n");
+		}
+		printf("%.10f ",((float*)VSMatrices.data)[i+16]);
 	}
 
 	glfwSetTime(0);
 
-	float arr[2] = {100, 120};
-	printf("loop begins!\n");
 	while(!glfwWindowShouldClose(window)) {
+		glfwPollEvents();
+		if(isMinimised) {
+			continue;
+		}
 		EngineColor Color = {0, 0, 1, 1};
 		res = EngineDrawStart(engine_instance, Color, &drawWaitSemaphore[EngineGetFrame(engine_instance)]);
-		if(res.EngineCode != ENGINE_SUCCESS) {
-			printf("drawstart failed\n %d", res.VulkanCode);
-			exit(-1);
-		}
 		EngineWriteDataInfo dataInfo = {
 			.binding = 0,
 			.startingIndex = 0,
@@ -143,18 +164,25 @@ int main() {
 			.content.image = renderImages[EngineGetFrame(engine_instance)],
 		};
 		EngineWriteData(engine_instance, &dataInfo);
-		
-		float tmp[2] = {arr[0], arr[1]};
+
 		float time = glfwGetTime();
-		tmp[0] += sinf(time) * 10;
-		tmp[1] += cosf(time) * 20;
-		memcpy(buffer.data, tmp, sizeof(float) * 2);
+		float arr[4] = {0, 0, 1.5 + sinf(time), 0.25};
+		memcpy(buffer.data, arr, sizeof(float) * 4);
+		
 		dataInfo = (EngineWriteDataInfo) {
 			.binding = 1,
 			.startingIndex = 0,
 			.endIndex = 0,
-			.type = ENGINE_BUFFER_UNIFORM,
+			.type = ENGINE_BUFFER_STORAGE,
 			.content.buffer = buffer
+		};
+		EngineWriteData(engine_instance, &dataInfo);
+		dataInfo = (EngineWriteDataInfo) {
+			.binding = 2,
+			.startingIndex = 0,
+			.endIndex = 0,
+			.type = ENGINE_BUFFER_UNIFORM,
+			.content.buffer = VSMatrices
 		};
 		EngineWriteData(engine_instance, &dataInfo);
 		
@@ -162,20 +190,16 @@ int main() {
 		EngineCreateCommand(engine_instance, &cmd);
 		EngineCommandRecordingStart(engine_instance, cmd, ENGINE_COMMAND_ONE_TIME);
 		EngineShaderRunInfo runInfo = {
-			.groupSizeX = ceilf((float)bufferSize.width/16),
-			.groupSizeY = ceilf((float)bufferSize.height/16),
+			.groupSizeX = ceilf((float)bufferSize.width/16.0f),
+			.groupSizeY = ceilf((float)bufferSize.height/16.0f),
 			.groupSizeZ = 1
 		};
 		EngineRunShader(engine_instance, cmd, 0, runInfo);
 		EngineCommandRecordingEnd(engine_instance, cmd);
 		EngineSubmitCommand(engine_instance, cmd, &drawWaitSemaphore[EngineGetFrame(engine_instance)], &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
-		res = EngineDrawEnd(engine_instance, &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
-		if(res.EngineCode != ENGINE_SUCCESS) {
-			printf("drawend failed\n %d", res.VulkanCode);
-			exit(-1);
-		}
-		glfwPollEvents();
+		EngineDrawEnd(engine_instance, &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
 	}
+	EngineDestroyBuffer(engine_instance, VSMatrices);
 	EngineDestroyBuffer(engine_instance, buffer);
 	EngineSwapchainDestroy(engine_instance);
 	for(int i = 0; i < 2; i++) {

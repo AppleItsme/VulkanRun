@@ -79,7 +79,6 @@ struct Engine {
 uint32_t EngineGetFrame(Engine *engine) {
 	return engine->cur_frame;
 }
-
 uint32_t NextFrame(Engine *engine) {
 	uint32_t cur_frame = engine->cur_frame;
 	cur_frame++;
@@ -87,7 +86,6 @@ uint32_t NextFrame(Engine *engine) {
 		cur_frame = 0;
 	return cur_frame;
 }
-
 void updateCurrentFrame_(Engine *engine) {
 	engine->cur_frame = NextFrame(engine);
 }
@@ -993,12 +991,12 @@ EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes,
 		bindings[i] = (VkDescriptorSetLayoutBinding) {
 			.binding = datatypes[i].bindingIndex,
 			.descriptorType = type,
-			.descriptorCount = datatypes[i].length,
+			.descriptorCount = datatypes[i].count,
 			.pImmutableSamplers = NULL, //for now we keep it NULL. Consider looking at it later
 			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT //consider ALL_SHADERS tho
 		};
 		poolSizes[i] = (VkDescriptorPoolSize) {
-			.descriptorCount = datatypes[i].length * FRAME_OVERLAP,
+			.descriptorCount = datatypes[i].count * FRAME_OVERLAP,
 			.type = type
 		};
 	}
@@ -1018,7 +1016,8 @@ EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes,
 		.maxSets = FRAME_OVERLAP,
 		.poolSizeCount = datatypeCount,
 		.pPoolSizes = poolSizes,
-		.pNext = NULL
+		.pNext = NULL,
+		.flags = 0
 	};
 	res = vkCreateDescriptorPool(engine->device, &poolCI, NULL, &engine->descriptorPool);
 	debug_msg("Descriptor pool created\n");
@@ -1030,7 +1029,7 @@ EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes,
 		.descriptorSetCount = 2,
 		.pNext = NULL,
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-		.pSetLayouts = layouts
+		.pSetLayouts = layouts,
 	};	
 	res = vkAllocateDescriptorSets(engine->device, &allocateInfo, engine->descriptorSet);
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_DATASET_DECLARATION_FAILED, res);

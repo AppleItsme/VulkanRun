@@ -1,0 +1,64 @@
+//GLSL version to use
+#version 460
+
+//size of a workgroup for compute
+layout (local_size_x = 16, local_size_y = 16) in;
+
+//descriptor bindings for the pipeline
+layout(rgba16f, set = 0, binding = 0) uniform image2D renderScreen;
+layout(std140, set = 0, binding = 1) readonly buffer _ {
+    vec3 position;
+    float radius;
+} object;
+layout(set = 0, binding = 2) uniform _ {
+    mat4 vs;
+    mat4 sv;
+} VSMatrices;
+
+#define PI 3.14159
+
+ivec2 imageRes = ivec2(imageSize(renderScreen));  
+
+ivec2 convertToScreenCoordinates(vec4 coords) {
+    coords = vec4(coords.xy/coords.z, 1, 1);
+    coords = VSMatrices.vs * coords;
+    return ivec2(coords.xy);
+}
+
+vec4 convertToViewportCoordinates(ivec2 coords) {
+    vec4 fcoords = vec4(coords,1,1);
+    vec4 curCoords = VSMatrices.sv * fcoords;
+    return curCoords;
+}
+
+//Our viewport has (0,0) in the centre and (1,1) in the top right
+
+vec3 rayGenerate() {
+    vec4 unnormalised_direction = convertToViewportCoordinates(ivec2(gl_GlobalInvocationID.xy)); 
+    vec3 direction = normalize(unnormalised_direction.xyz);
+    return direction;
+}
+
+
+void main() {
+    //shoot a ray
+    vec3 rayDir = rayGenerate();
+    float a = dot(rayDir, rayDir);
+    float b = -2*dot(rayDir, object.position);
+    float c = dot(object.position, object.position) - object.radius * object.radius;
+    float discriminant = pow(-2*dot(rayDir, object.position), 2)-4*dot(rayDir, rayDir)*(dot(object.position, object.position)-pow(object.radius, 2));
+    if(discriminant < 0) {
+        return;
+    }
+    float intersectionDistance = (-b+sqrt(b*b-4*a*c))/(2*a);
+    float secondDistance = (-b-sqrt(b*b-4*a*c))/(2*a);
+    if(secondDistance < intersectionDistance) {
+        intersectionDistance = secondDistance;
+    }
+    vec3 pointPosition = intersectionDistance * rayDir;
+    if(pointPosition.z < 0.1) {
+        return;
+    }
+    vec4 color = vec4(1,0,2*pointPosition.z,1);
+    imageStore(renderScreen, ivec2(gl_GlobalInvocationID.xy), color);
+}
