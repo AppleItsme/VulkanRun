@@ -12,3 +12,16 @@ inline void debug_msg(const char *format, ...) {
 	va_end(arg);
 #endif
 }
+
+typedef struct {
+	size_t length, count;
+	size_t byteSize;
+	void *arr;
+} EngineQueue;
+
+
+void EngineCreateQueue(EngineQueue *queue);
+void EngineDestroyQueue(EngineQueue *queue);
+void EngineQueueAdd(EngineQueue *queue, void *in);
+void EngineQueueRetreive(EngineQueue *queue, void *out);
+void EngineQueuePeek(EngineQueue *queue, void *out);

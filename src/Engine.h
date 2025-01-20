@@ -107,10 +107,8 @@ EngineResult EngineInit(Engine **engine, EngineCI engineCI, uintptr_t *vkInstanc
 EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface);
 void EngineDestroy(Engine *engine);
 
-EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight, EngineImage *renderImages);
+EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight);
 void EngineSwapchainDestroy(Engine *engine);
-
-uint32_t EngineGetFrame(Engine *engine);
 
 EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemaphore *signalSemaphore);
 EngineResult EngineDrawEnd(Engine *engine, EngineSemaphore *waitSemaphore);
