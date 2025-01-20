@@ -94,7 +94,7 @@ typedef struct {
         EngineImage image;
         EngineBuffer buffer;
     } content;
-} EngineWriteDataInfo;
+} EngineAttachDataInfo;
 
 typedef uintptr_t EngineSemaphore;
 typedef uintptr_t EngineCommand;
@@ -108,10 +108,8 @@ EngineResult EngineInit(Engine **engine, EngineCI engineCI, uintptr_t *vkInstanc
 EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface);
 void EngineDestroy(Engine *engine);
 
-EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight, EngineImage *renderImages);
+EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight);
 void EngineSwapchainDestroy(Engine *engine);
-
-uint32_t EngineGetFrame(Engine *engine);
 
 EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemaphore *signalSemaphore);
 EngineResult EngineDrawEnd(Engine *engine, EngineSemaphore *waitSemaphore);
@@ -129,7 +127,7 @@ void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShad
 
 extern inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo);
 EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount);
-void EngineWriteData(Engine *engine, EngineWriteDataInfo *info);
+void EngineAttachData(Engine *engine, EngineAttachDataInfo *info);
 
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore);
 void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore);

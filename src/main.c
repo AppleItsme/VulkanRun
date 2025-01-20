@@ -16,7 +16,6 @@
 EngineResult res;
 Engine *engine_instance = NULL;
 GLFWwindow *window = NULL;
-EngineImage renderImages[2];
 
 EngineBuffer VSMatrices = {
 	.elementByteSize = sizeof(float),
@@ -61,7 +60,7 @@ void window_size_callback(GLFWwindow *window, int width, int height) {
 		if(!wasMinimised) {
 			EngineSwapchainDestroy(engine_instance);
 		}
-		res = EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height, renderImages);
+		res = EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height);
 		wasMinimised = false;
 	}
 	sendValues();
@@ -86,11 +85,24 @@ int main() {
 	EngineFinishSetup(engine_instance, surface);
 	glfwGetFramebufferSize(window, &bufferSize.width, &bufferSize.height);
 	glfwSetWindowSizeCallback(window, window_size_callback);
-	EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height, renderImages);
-
-	size_t length = 0;
-	EngineDataTypeInfo dTypes[ENGINE_DATA_TYPE_INFO_LENGTH] = {0};
-	EngineGenerateDataTypeInfo(dTypes);
+	EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height);
+	EngineDataTypeInfo dTypes[] = {
+		{
+			.bindingIndex = 0,
+			.count = 1,
+			.type = ENGINE_IMAGE
+		},
+		{
+			.bindingIndex = 1,
+			.count = 1,
+			.type = ENGINE_BUFFER_STORAGE
+		}, 
+		{
+			.bindingIndex = 2,
+			.count = 1,
+			.type = ENGINE_BUFFER_UNIFORM
+		}
+	};	
 	
 	res = EngineDeclareDataSet(engine_instance, dTypes, sizeof(dTypes)/sizeof(dTypes[0]));
 	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/raytrace.spv", "rb");
@@ -113,11 +125,9 @@ int main() {
 	res = EngineLoadShaders(engine_instance, &shaderInfo, 1);
 	free(shaderCode);
 
-	EngineSemaphore drawWaitSemaphore[2] = {0};
-	EngineSemaphore commandDoneSemaphore[2] = {0};
-	for(int i = 0; i < 2; i++) {
-		EngineCreateSemaphore(engine_instance, &commandDoneSemaphore[i]);
-	}
+	EngineSemaphore drawWaitSemaphore = {0};
+	EngineSemaphore commandDoneSemaphore = {0};
+	EngineCreateSemaphore(engine_instance, &commandDoneSemaphore);
 
 	EngineBuffer buffer = {
 		.elementByteSize = sizeof(float),
@@ -125,76 +135,61 @@ int main() {
 	};
 	EngineCreateBuffer(engine_instance, &buffer, ENGINE_BUFFER_STORAGE);
 	EngineCreateBuffer(engine_instance, &VSMatrices, ENGINE_BUFFER_UNIFORM);
-
+	EngineAttachDataInfo dataInfo = {
+		.binding = 2,
+		.startingIndex = 0,
+		.endIndex = 0,
+		.type = ENGINE_BUFFER_UNIFORM,
+		.content.buffer = VSMatrices
+	};
+	EngineAttachData(engine_instance, &dataInfo);
+	dataInfo = (EngineAttachDataInfo) {
+		.binding = 1,
+		.startingIndex = 0,
+		.endIndex = 0,
+		.type = ENGINE_BUFFER_STORAGE,
+		.content.buffer = buffer
+	};
+	EngineAttachData(engine_instance, &dataInfo);
 	sendValues();
-	for(int i = 0; i < 16; i++) {
-		if(i != 0 && i % 4 == 0) {
-			printf("\n");
-		}
-		printf("%.10f ",((float*)VSMatrices.data)[i+16]);
-	}
+	vec4 arr = {0, 0, 3, 1};
+	memcpy(buffer.data, arr, sizeof(float) * 4);
+
+	vec4 rotatedSunlight = {0, 1, 0, 2};
+	memcpy((float*)buffer.data+4, &rotatedSunlight, sizeof(float) * 4);
 
 	glfwSetTime(0);
+
+	uint32_t i = 100;
 
 	while(!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
 		if(isMinimised) {
 			continue;
 		}
-		EngineColor Color = {0, 0, 1, 1};
-		res = EngineDrawStart(engine_instance, Color, &drawWaitSemaphore[EngineGetFrame(engine_instance)]);
-		EngineWriteDataInfo dataInfo = {
-			.binding = 0,
-			.startingIndex = 0,
-			.endIndex = 0,
-			.type = ENGINE_IMAGE,
-			.content.image = renderImages[EngineGetFrame(engine_instance)],
-		};
-		EngineWriteData(engine_instance, &dataInfo);
-
 		float time = glfwGetTime();
-		vec4 arr = {0, 0, 3 + sinf(time), 1};
-		memcpy(buffer.data, arr, sizeof(float) * 4);
-
 		vec4 rotatedSunlight = {-sinf(time), cosf(time), sinf(time), 2};
 		memcpy((float*)buffer.data+4, &rotatedSunlight, sizeof(float) * 4);
 		
-		dataInfo = (EngineWriteDataInfo) {
-			.binding = 1,
-			.startingIndex = 0,
-			.endIndex = 0,
-			.type = ENGINE_BUFFER_STORAGE,
-			.content.buffer = buffer
-		};
-		EngineWriteData(engine_instance, &dataInfo);
-		dataInfo = (EngineWriteDataInfo) {
-			.binding = 2,
-			.startingIndex = 0,
-			.endIndex = 0,
-			.type = ENGINE_BUFFER_UNIFORM,
-			.content.buffer = VSMatrices
-		};
-		EngineWriteData(engine_instance, &dataInfo);
-		
+		EngineColor Color = {0, 0, 1, 1};
+		res = EngineDrawStart(engine_instance, Color, &drawWaitSemaphore);
 		EngineCommand cmd = 0;
 		EngineCreateCommand(engine_instance, &cmd);
 		EngineCommandRecordingStart(engine_instance, cmd, ENGINE_COMMAND_ONE_TIME);
 		EngineShaderRunInfo runInfo = {
-			.groupSizeX = ceilf((float)bufferSize.width/16.0f),
-			.groupSizeY = ceilf((float)bufferSize.height/16.0f),
+			.groupSizeX = ceilf((float)bufferSize.width/32.0f),
+			.groupSizeY = ceilf((float)bufferSize.height/32.0f),
 			.groupSizeZ = 1
 		};
 		EngineRunShader(engine_instance, cmd, 0, runInfo);
 		EngineCommandRecordingEnd(engine_instance, cmd);
-		EngineSubmitCommand(engine_instance, cmd, &drawWaitSemaphore[EngineGetFrame(engine_instance)], &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
-		EngineDrawEnd(engine_instance, &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
+		EngineSubmitCommand(engine_instance, cmd, &drawWaitSemaphore, &commandDoneSemaphore);
+		EngineDrawEnd(engine_instance, &commandDoneSemaphore);
 	}
 	EngineDestroyBuffer(engine_instance, VSMatrices);
 	EngineDestroyBuffer(engine_instance, buffer);
 	EngineSwapchainDestroy(engine_instance);
-	for(int i = 0; i < 2; i++) {
-		EngineDestroySemaphore(engine_instance, commandDoneSemaphore[i]);
-	}
+	EngineDestroySemaphore(engine_instance, commandDoneSemaphore);
 	EngineDestroy(engine_instance);
 	glfwDestroyWindow(window);
 	glfwTerminate();
