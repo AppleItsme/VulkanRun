@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <utils.h>
+#include <math.h>
 
 #include <vk_mem_alloc.h>
 
@@ -29,6 +30,8 @@ struct Engine {
     VkDevice device;
     VkInstance instance;
     VkPhysicalDevice physicalDevice;
+	VkPhysicalDeviceProperties physicalDeviceProperties;
+	uint32_t workgroupSize;
 	bool hardwareRayTracing;
 
     VkSurfaceKHR surface;
@@ -138,6 +141,7 @@ typedef struct {
 	bool supportsRayTracing;
 	VkSurfaceFormatKHR format;
 	VkPhysicalDevice device;
+	VkPhysicalDeviceProperties props;
 	VkDeviceSize minimumOffset;
 } deviceStats;
 
@@ -224,9 +228,8 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 
 	for(int i = 0; i < deviceCount; i++) {
 		deviceStats cur_deviceStats = {.point = 0, .device = devices[i], .supportsRayTracing = false};
-		VkPhysicalDeviceProperties props = {0};
-		vkGetPhysicalDeviceProperties(devices[i], &props);
-		debug_msg("Device %d: %s\n", i, props.deviceName);
+		vkGetPhysicalDeviceProperties(devices[i], &cur_deviceStats.props);
+		debug_msg("Device %d: %s\n", i, cur_deviceStats.props.deviceName);
 
 		cur_deviceStats.graphicsI = -1; 
 		cur_deviceStats.presentationI = -1; 
@@ -346,18 +349,18 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		if(!goodFormat)
 			continue;
 		cur_deviceStats.point++; //make it strictly better than a 0 point
-		if(props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+		if(cur_deviceStats.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
 			cur_deviceStats.point++;
 		}
 		debug_msg("\tDevice Passed with points: %d\n", cur_deviceStats.point);
 		debug_msg("\tMax workgroups for that device:\n\t\tmaxComputeWorkGroupSize: %llu\n\t\t\
 			maxComputeWorkGroupCount: %llu\n\t\tmaxComputeWorkGroupInvocations: %llu\n", 
-			props.limits.maxComputeWorkGroupSize,
-			props.limits.maxComputeWorkGroupCount,
-			props.limits.maxComputeWorkGroupInvocations
+			cur_deviceStats.props.limits.maxComputeWorkGroupSize,
+			cur_deviceStats.props.limits.maxComputeWorkGroupCount,
+			cur_deviceStats.props.limits.maxComputeWorkGroupInvocations
 		);
 
-		cur_deviceStats.minimumOffset = props.limits.minStorageBufferOffsetAlignment;
+		cur_deviceStats.minimumOffset = cur_deviceStats.props.limits.minStorageBufferOffsetAlignment;
 		if(cur_deviceStats.point > bestDeviceStats.point) {
 			bestDeviceStats = cur_deviceStats;
 		}
@@ -369,6 +372,7 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		return (EngineResult) {ENGINE_INAPPROPRIATE_GPU, VK_SUCCESS};
 	} 
 	engine->physicalDevice = bestDeviceStats.device;
+	engine->physicalDeviceProperties = bestDeviceStats.props;
 	engine->swapchainDetails.format = bestDeviceStats.format;
 	engine->swapchainDetails.presentMode = VK_PRESENT_MODE_FIFO_KHR;
 	engine->compute.index = bestDeviceStats.computeI;
@@ -380,9 +384,7 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 	free(extensionProps);
 	free(formats);
 
-	VkPhysicalDeviceProperties props;
-	vkGetPhysicalDeviceProperties(engine->physicalDevice, &props);
-	debug_msg("\x1b[1;37mThe chosen device: %s\n\x1b[0m", props.deviceName);
+	debug_msg("\x1b[1;37mThe chosen device: %s\n\x1b[0m", engine->physicalDeviceProperties.deviceName);
 	return ENGINE_RESULT_SUCCESS;
 }
 EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight) {
@@ -954,6 +956,31 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 	engine->shaderModules = malloc(sizeof(VkShaderModule) * shaderCount);
 	engine->pipelines = malloc(sizeof(VkPipeline) * shaderCount);
 	VkComputePipelineCreateInfo *pipelineCIs = malloc(sizeof(VkComputePipelineCreateInfo) * shaderCount);
+	
+	engine->workgroupSize = ceil(sqrtl(engine->physicalDeviceProperties.limits.maxComputeWorkGroupInvocations));
+	debug_msg("workgroup size per axis: %lu\n", engine->workgroupSize);
+	VkSpecializationMapEntry mapEntries[] = {
+		{
+			.constantID = 1,
+			.offset = 0,
+			.size = sizeof(uint32_t)
+		},
+		{
+			.constantID = 2,
+			.offset = 0,
+			.size = sizeof(uint32_t)
+		}
+	};
+
+
+	VkSpecializationInfo specialInfo = {
+		.dataSize = sizeof(uint32_t),
+		.pData = &engine->workgroupSize,
+		.mapEntryCount = 2,
+		.pMapEntries = mapEntries
+	};
+
+
 	VkPipelineLayoutCreateInfo pipelineLayoutCI = {
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
 		.pNext = NULL,
@@ -982,7 +1009,7 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 				.stage = VK_SHADER_STAGE_COMPUTE_BIT,
 				.pName = "main",
 				.pNext = NULL,
-				.pSpecializationInfo = NULL,
+				.pSpecializationInfo = &specialInfo,
 				.module = engine->shaderModules[i],
 			},
 		};
@@ -1054,7 +1081,7 @@ EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes,
 	debug_msg("Descriptor set created\n");
 	return ENGINE_RESULT_SUCCESS;
 }
-void EngineWriteData(Engine *engine, EngineWriteDataInfo info) {
+void EngineAttachData(Engine *engine, EngineAttachDataInfo info) {
 	VkWriteDescriptorSet writeSet = {
 		.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 		.pNext = NULL,

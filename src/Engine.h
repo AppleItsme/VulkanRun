@@ -93,7 +93,7 @@ typedef struct {
         EngineImage image;
         EngineBuffer buffer;
     } content;
-} EngineWriteDataInfo;
+} EngineAttachDataInfo;
 
 typedef uintptr_t EngineSemaphore;
 typedef uintptr_t EngineCommand;
@@ -123,7 +123,7 @@ void EngineDestroyCommand(Engine *engine, EngineCommand cmd);
 void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShaderRunInfo runInfo);
 
 EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount);
-void EngineWriteData(Engine *engine, EngineWriteDataInfo *info);
+void EngineAttachData(Engine *engine, EngineAttachDataInfo *info);
 
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore);
 void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore);

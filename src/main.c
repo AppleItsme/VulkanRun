@@ -135,22 +135,22 @@ int main() {
 	};
 	EngineCreateBuffer(engine_instance, &buffer, ENGINE_BUFFER_STORAGE);
 	EngineCreateBuffer(engine_instance, &VSMatrices, ENGINE_BUFFER_UNIFORM);
-	EngineWriteDataInfo dataInfo = {
+	EngineAttachDataInfo dataInfo = {
 		.binding = 2,
 		.startingIndex = 0,
 		.endIndex = 0,
 		.type = ENGINE_BUFFER_UNIFORM,
 		.content.buffer = VSMatrices
 	};
-	EngineWriteData(engine_instance, &dataInfo);
-	dataInfo = (EngineWriteDataInfo) {
+	EngineAttachData(engine_instance, &dataInfo);
+	dataInfo = (EngineAttachDataInfo) {
 		.binding = 1,
 		.startingIndex = 0,
 		.endIndex = 0,
 		.type = ENGINE_BUFFER_STORAGE,
 		.content.buffer = buffer
 	};
-	EngineWriteData(engine_instance, &dataInfo);
+	EngineAttachData(engine_instance, &dataInfo);
 	sendValues();
 	vec4 arr = {0, 0, 3, 1};
 	memcpy(buffer.data, arr, sizeof(float) * 4);
