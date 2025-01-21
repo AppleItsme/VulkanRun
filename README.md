@@ -1,49 +1,101 @@
 # MY VULKAN ENGINE
 It is fully raytraced. For now only software-based raytracing.
-## DIFFERENT BINDINGS
 
-**Bold** means that user will not be able to affect this directly.
+# Maths
+There are 4 spaces. Listing them in the order of transformations:
+1. **Model space** represents position of primitives (usually triangles) relative to the centre of the model. Thats the default starting point and does not need a transformation matrix.
+2. **World space** represents the position of meshes in the world.
+3. **View space** represents the position of meshes relative to the camera's position in the world.
+4. **Screen space** represents the pixels that each mesh occupies
 
-Binding 0: **renderScreen**.
+$\quad$ Each primitive first needs to get transformed from model to world space, then from world to view space and lastly from view to screen space.
 
-Binding 1: **Matrix array**.
+## General transformations
+ - Rotation function along the plane $e_{ij}$:
+$$
+R_{ij}(\theta, \vec{w})= e_i(w_icos\space\theta-w_jsin\space\theta)+e_j(w_isin\space\theta+w_jcos\space\theta)+w_ke_k
+$$ 
+$\qquad$ Hence the all directional rotation matrix:
+$$
+\begin{pmatrix}
+\cos\space\theta_x\cos\space\theta_z-\sin\space\theta_x\sin\theta_y\sin\space\theta_z & -\cos\space\theta_z\sin\space\theta_x-\cos\space\theta_x\sin\space\theta_y\sin\theta_z & -\cos\space\theta_y\sin\theta_z & 0\\
+\cos\space\theta_y\sin\space\theta_x & \cos\space\theta_x\cos\space\theta_y & \sin\space\theta_y & 0\\
+\cos\space\theta_z\sin\space\theta_x\sin\space\theta_y+\cos\space\theta_x\sin\space\theta_z & \cos\space\theta_x\cos\space\theta_z\sin\space\theta_y - \sin\space\theta_x\sin\space\theta_z & \cos\space\theta_y\cos\space\theta_z & 0 \\
+0 & 0 & 0 & 1
+\end{pmatrix}
+$$
+$\qquad$ The GPU will compute the rotation-scale-translation matrix on its own and we will only provide the following input matrix:
+$$
+\begin{bmatrix}
+\theta_x & x_{scale} & x_{pos}\\
+\theta_y & y_{scale} & y_{pos}\\
+\theta_z & z_{scale} & z_{pos}
+\end{bmatrix}
+$$
+## Transformation stages
+Model to World space:
 
-Binding 2: Triangle data.
+$\qquad$ From model to World space all we have to do is scale, translate and rotate the points along the user defined setup. Hence for each triangle we send the following inputs:
+$$
+\begin{bmatrix}
+\theta_x & x_{scale} & x_{origin}\\
+\theta_y & y_{scale} & y_{origin}\\
+\theta_z & z_{scale} & z_{origin}
+\end{bmatrix}
+$$
+
+World to View space:
+
+$\qquad$ The world needs to do the inverse of the rotation and translation matrices as opposed to the transformation experienced by the camera. So we take the same matrix and use negative angles and negative translations. Basically we send this:
+$$
+\begin{bmatrix}
+-\theta_x & x_{scale} & -x_{origin}\\
+-\theta_y & y_{scale} & -y_{origin}\\
+-\theta_z & z_{scale} & -z_{origin}
+\end{bmatrix}
+$$
+
+View to Screen space:
+
+$\qquad$ View to screen space matrix (**NOTE** the x and y components have to have already been divided by the z coordinate before applying this matrix):
+$$
+\begin{pmatrix}
+\frac{bufferHeight}{2} &0 &0 &\frac{bufferWidth}{2}\\
+0 & -\frac{bufferHeight}{2} & 0 & \frac{bufferHeight}{2}\\
+0 & 0 & 1 & 0\\
+0 & 0 & 0 & 1 
+\end{pmatrix}
+$$
+
+# GPU interface
+Each buffer will have the following transformation struct:
 ```c
-struct triangleData {
-    vec3 points[3];
-    vec4 color;
-    int textureIndex; //-1 means no texture
+struct Transformation {
+    vec3 translation;
+    vec3 scale;
+    vec3 rotation;
+}
+```
+You may recall that in the General transformations section we sent a matrix instead. Well these two are different ways of describing the exact same piece of data so it doesn't matter.
 
-    vec3 normals[3];
-    int normalTextureIndex; //-1 means no normal texture
+Vertex buffer will store all the vertices that are used by the application. 
+Transformations will be stored separately because many primitives are likely to share the same model to world space transformations.
+
+Any other data will be stored in the triangle buffer:
+```c
+struct TriangleBuffer {
+    uvec3 vertexIndices;
+    vec2 UVcoords[3]; //one UV coordinate per vertex
     uint materialIndex;
+    uint transformationIndex;
 };
 ```
 
-Binding 3: Sphere data.
+Or the Elipsoid buffer:
 ```c
-struct sphereData {
+struct ElipsoidBuffer {
     vec3 position;
-    float radius;
-    vec4 color;
-    int textureIndex;
-    int normalTextureIndex; 
     uint materialIndex;
-};
-```
-
-Binding 4: Texture array.
-
-Binding 5: Normal texture array.
-
-Binding 6: Material array.
-```c
-struct Material {
-    float roughness;
-    float luminosity;
-    float refraction;
-    float emmisivity;
-    vec4 color;
-};
+    uint transformationIndex;
+}
 ```

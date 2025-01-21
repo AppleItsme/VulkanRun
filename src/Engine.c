@@ -349,7 +349,7 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		if(!goodFormat)
 			continue;
 		cur_deviceStats.point++; //make it strictly better than a 0 point
-		if(cur_deviceStats.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+		if(cur_deviceStats.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
 			cur_deviceStats.point++;
 		}
 		debug_msg("\tDevice Passed with points: %d\n", cur_deviceStats.point);
@@ -610,7 +610,7 @@ EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemap
 	vkBeginCommandBuffer(engine->backgroundBuffer, &beginInfo);
 	
 	VkClearColorValue backgroundColor = {
-		.float32 = {background.r, background.g, background.b, background.a}
+		.float32 = {background[0], background[1], background[2], background[3]}
 	};
 	ChangeImageLayout(engine->backgroundBuffer, 
 				engine->renderImage.image, 
@@ -1019,23 +1019,16 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 	return ENGINE_RESULT_SUCCESS;
 }
 
+#define ENGINE_DATATYPE(B, T) (EngineDataTypeInfo) {.bindingIndex = B, .count = 1, .type = T}
+
+
 inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo) {
-	dataTypeInfo[0] = (EngineDataTypeInfo) {
-		.bindingIndex = 0,
-		.count = 1,
-		.type = ENGINE_IMAGE
-	};
-	dataTypeInfo[1] = (EngineDataTypeInfo) {
-		.bindingIndex = 1,
-		.count = 1,
-		.type = ENGINE_BUFFER_STORAGE
-	};
-	dataTypeInfo[2] = (EngineDataTypeInfo) {
-		.bindingIndex = 2,
-		.count = 1,
-		.type = ENGINE_BUFFER_UNIFORM
-	};
+	dataTypeInfo[0] = ENGINE_DATATYPE(0, ENGINE_IMAGE);
+	dataTypeInfo[1] = ENGINE_DATATYPE(1, ENGINE_BUFFER_STORAGE);
+	dataTypeInfo[2] = ENGINE_DATATYPE(2, ENGINE_BUFFER_UNIFORM);
 }
+
+
 EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount) {
 	VkDescriptorSetLayoutBinding *bindings = malloc(sizeof(VkDescriptorSetLayoutBinding) * datatypeCount);
 	VkDescriptorPoolSize *poolSizes = malloc(sizeof(VkDescriptorPoolSize) * datatypeCount);

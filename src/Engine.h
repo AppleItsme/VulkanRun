@@ -62,10 +62,6 @@ typedef struct {
 } EngineResult;
 
 typedef struct {
-    float r,g,b,a;
-} EngineColor;
-
-typedef struct {
     char *code;
     size_t byteSize;
 } EngineShaderInfo;
@@ -85,15 +81,17 @@ typedef struct {
     void *data;
 } EngineBuffer;
 
+typedef union {
+    EngineImage image;
+    EngineBuffer buffer;
+} EngineDataContent;
+
 typedef struct {
     uint32_t startingIndex, 
             endIndex,
             binding;
     EngineDataType type;
-    union {
-        EngineImage image;
-        EngineBuffer buffer;
-    } content;
+    EngineDataContent content;
 } EngineAttachDataInfo;
 
 typedef uintptr_t EngineSemaphore;
@@ -102,6 +100,8 @@ typedef enum {
     ENGINE_COMMAND_REUSABLE,
     ENGINE_COMMAND_ONE_TIME
 } EngineCommandRecordingType;
+
+typedef vec4 EngineColor;
 
 #define MAKE_VERSION(major, minor, patch) ((((uint32_t)(major)) << 22U) | (((uint32_t)(minor)) << 12U) | ((uint32_t)(patch)))
 EngineResult EngineInit(Engine **engine, EngineCI engineCI, uintptr_t *vkInstance);
@@ -138,9 +138,6 @@ void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer);
 EngineResult EngineCreateImage(Engine *engine, EngineImage *engineImage);
 void EngineDestroyImage(Engine *engine, EngineImage engineImage);
 
-
-typedef vec4 EngineColor;
-
 typedef struct {
     float roughness, refraction, luminosity;
     EngineColor color;
@@ -151,23 +148,23 @@ typedef enum {
     ENGINE_MESH
 } EngineMeshType;
 
-typedef struct {
-    vec3 vertices[3];
-    vec3 textureCoords[3];
-    vec3 normals[3];
-    bool textured;
-} EngineTriangleData;
+// typedef struct {
+//     vec3 vertices[3];
+//     vec3 textureCoords[3];
+//     vec3 normals[3];
+//     bool textured;
+// } EngineTriangleData;
 
-typedef struct {
-    float radius;
-} EngineSphereData;
+// typedef struct {
+//     float radius;
+// } EngineSphereData;
 
-typedef struct {
-    vec3 position;
-    EngineMaterial material;
-    EngineMeshType type;
+// typedef struct {
+//     vec3 position;
+//     EngineMaterial material;
+//     EngineMeshType type;
 
-    EngineSphereData sphere;
-    size_t trianglesCount;
-    EngineTriangleData *triangles;
-} EngineMesh;
+//     EngineSphereData sphere;
+//     size_t trianglesCount;
+//     EngineTriangleData *triangles;
+// } EngineMesh;

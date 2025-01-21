@@ -38,8 +38,8 @@ target_link_libraries(engine PRIVATE
 	utilities
 	vma_usage
 	${Vulkan_LIBRARIES} 
-	cglm
 	)
+target_link_libraries(engine PUBLIC cglm)
 target_link_libraries(${PROJECT_NAME}
 	glfw
 	engine
