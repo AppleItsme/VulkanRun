@@ -13,65 +13,65 @@ $\quad$ Each primitive first needs to get transformed from model to world space,
 ## General transformations
  - Rotation function along the plane $e_{ij}$:
 
-$$
+```math
 R_{ij}(\theta, \vec{w})= e_i(w_icos\space\theta-w_jsin\space\theta)+e_j(w_isin\space\theta+w_jcos\space\theta)+w_ke_k
-$$ 
+``` 
 $\qquad$ Hence the all directional rotation matrix:
 
-$$
+```math
 \begin{pmatrix}
 \cos\space\theta_x\cos\space\theta_z-\sin\space\theta_x\sin\theta_y\sin\space\theta_z & -\cos\space\theta_z\sin\space\theta_x-\cos\space\theta_x\sin\space\theta_y\sin\theta_z & -\cos\space\theta_y\sin\theta_z & 0\\
 \cos\space\theta_y\sin\space\theta_x & \cos\space\theta_x\cos\space\theta_y & \sin\space\theta_y & 0\\
 \cos\space\theta_z\sin\space\theta_x\sin\space\theta_y+\cos\space\theta_x\sin\space\theta_z & \cos\space\theta_x\cos\space\theta_z\sin\space\theta_y - \sin\space\theta_x\sin\space\theta_z & \cos\space\theta_y\cos\space\theta_z & 0 \\
 0 & 0 & 0 & 1
 \end{pmatrix}
-$$
+```
 $\qquad$ The GPU will compute the rotation-scale-translation matrix on its own and we will only provide the following input matrix:
 
-$$
+```math
 \begin{bmatrix}
 \theta_x & x_{scale} & x_{pos}\\
 \theta_y & y_{scale} & y_{pos}\\
 \theta_z & z_{scale} & z_{pos}
 \end{bmatrix}
-$$
+```
 ## Transformation stages
 Model to World space:
 
 $\qquad$ From model to World space all we have to do is scale, translate and rotate the points along the user defined setup. Hence for each triangle we send the following inputs:
 
-$$
+```math
 \begin{bmatrix}
 \theta_x & x_{scale} & x_{origin}\\
 \theta_y & y_{scale} & y_{origin}\\
 \theta_z & z_{scale} & z_{origin}
 \end{bmatrix}
-$$
+```
 
 World to View space:
 
 $\qquad$ The world needs to do the inverse of the rotation and translation matrices as opposed to the transformation experienced by the camera. So we take the same matrix and use negative angles and negative translations. Basically we send this:
 
-$$
+```math
 \begin{bmatrix}
 -\theta_x & x_{scale} & -x_{origin}\\
 -\theta_y & y_{scale} & -y_{origin}\\
 -\theta_z & z_{scale} & -z_{origin}
 \end{bmatrix}
-$$
+```
 
 View to Screen space:
 
 $\qquad$ View to screen space matrix (**NOTE** the x and y components have to have already been divided by the z coordinate before applying this matrix):
 
-$$
+```math
 \begin{pmatrix}
 \frac{bufferHeight}{2} &0 &0 &\frac{bufferWidth}{2}\\
 0 & -\frac{bufferHeight}{2} & 0 & \frac{bufferHeight}{2}\\
 0 & 0 & 1 & 0\\
 0 & 0 & 0 & 1 
 \end{pmatrix}
-$$
+```
 
 # GPU interface
 Each buffer will have the following transformation struct:
