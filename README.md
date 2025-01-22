@@ -16,14 +16,14 @@ $\quad$ Each primitive first needs to get transformed from model to world space,
 ```math
 R_{ij}(\theta, \vec{w})= e_i(w_icos\space\theta-w_jsin\space\theta)+e_j(w_isin\space\theta+w_jcos\space\theta)+w_ke_k
 ``` 
-$\qquad$ Hence the all directional rotation matrix:
+$\qquad$ By first doing the rotation around the x axis, then y axis and lastly z axis, we obtain the **omni directional rotation matrix**:
 
 ```math
 \begin{pmatrix}
-\cos\space\theta_x\cos\space\theta_z-\sin\space\theta_x\sin\theta_y\sin\space\theta_z & -\cos\space\theta_z\sin\space\theta_x-\cos\space\theta_x\sin\space\theta_y\sin\theta_z & -\cos\space\theta_y\sin\theta_z & 0\\
-\cos\space\theta_y\sin\space\theta_x & \cos\space\theta_x\cos\space\theta_y & \sin\space\theta_y & 0\\
-\cos\space\theta_z\sin\space\theta_x\sin\space\theta_y+\cos\space\theta_x\sin\space\theta_z & \cos\space\theta_x\cos\space\theta_z\sin\space\theta_y - \sin\space\theta_x\sin\space\theta_z & \cos\space\theta_y\cos\space\theta_z & 0 \\
-0 & 0 & 0 & 1
+\cos\space\theta_y\cos\space\theta_z&-\sin\space\theta_x\sin\space\theta_y\cos\space\theta_z-\cos\space\theta_x\sin\space\theta_z&\sin\space\theta_x\sin\space\theta_z-\cos\space\theta_x\sin\space\theta_y\cos\space\theta_z&0\\
+\cos\space\theta_y\sin\space\theta_z&\cos\space\theta_x\cos\space\theta_z-\sin\space\theta_x\sin\space\theta_y\sin\space\theta_z&-\sin\space\theta_x\cos\space\theta_z-\cos\space\theta_x\sin\space\theta_y\sin\space\theta_z&0\\
+\sin\space\theta_y&\sin\space\theta_x\cos\space\theta_y&\cos\space\theta_x\cos\space\theta_y&0\\
+0&0&0&1
 \end{pmatrix}
 ```
 $\qquad$ The GPU will compute the rotation-scale-translation matrix on its own and we will only provide the following input matrix:
