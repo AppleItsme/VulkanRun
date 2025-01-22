@@ -47,6 +47,7 @@ $$
 World to View space:
 
 $\qquad$ The world needs to do the inverse of the rotation and translation matrices as opposed to the transformation experienced by the camera. So we take the same matrix and use negative angles and negative translations. Basically we send this:
+
 $$
 \begin{bmatrix}
 -\theta_x & x_{scale} & -x_{origin}\\
