@@ -12,10 +12,12 @@ $\quad$ Each primitive first needs to get transformed from model to world space,
 
 ## General transformations
  - Rotation function along the plane $e_{ij}$:
+
 $$
 R_{ij}(\theta, \vec{w})= e_i(w_icos\space\theta-w_jsin\space\theta)+e_j(w_isin\space\theta+w_jcos\space\theta)+w_ke_k
 $$ 
 $\qquad$ Hence the all directional rotation matrix:
+
 $$
 \begin{pmatrix}
 \cos\space\theta_x\cos\space\theta_z-\sin\space\theta_x\sin\theta_y\sin\space\theta_z & -\cos\space\theta_z\sin\space\theta_x-\cos\space\theta_x\sin\space\theta_y\sin\theta_z & -\cos\space\theta_y\sin\theta_z & 0\\
@@ -25,6 +27,7 @@ $$
 \end{pmatrix}
 $$
 $\qquad$ The GPU will compute the rotation-scale-translation matrix on its own and we will only provide the following input matrix:
+
 $$
 \begin{bmatrix}
 \theta_x & x_{scale} & x_{pos}\\
@@ -36,6 +39,7 @@ $$
 Model to World space:
 
 $\qquad$ From model to World space all we have to do is scale, translate and rotate the points along the user defined setup. Hence for each triangle we send the following inputs:
+
 $$
 \begin{bmatrix}
 \theta_x & x_{scale} & x_{origin}\\
@@ -59,6 +63,7 @@ $$
 View to Screen space:
 
 $\qquad$ View to screen space matrix (**NOTE** the x and y components have to have already been divided by the z coordinate before applying this matrix):
+
 $$
 \begin{pmatrix}
 \frac{bufferHeight}{2} &0 &0 &\frac{bufferWidth}{2}\\
