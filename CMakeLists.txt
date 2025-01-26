@@ -22,6 +22,7 @@ include_directories(${Vulkan_INCLUDE_DIRS})
 add_executable(${PROJECT_NAME} src/main.c)
 add_library(engine src/Engine.c)
 add_library(vma_usage src/vma.cpp)
+add_library(stb_usage src/stb.c)
 add_library(utilities src/utils.c)
 
 target_include_directories(vma_usage PRIVATE ThirdParty/VulkanMemoryAllocator/include)
@@ -31,17 +32,22 @@ add_subdirectory(ThirdParty/glfw)
 
 include_directories(ThirdParty/glfw/include)
 include_directories(ThirdParty/cglm/include)
+include_directories(ThirdParty/stb)
 target_include_directories(engine PRIVATE ThirdParty/VulkanMemoryAllocator/include)
+target_include_directories(stb_usage PRIVATE ThirdPrty/stb)
+
 include_directories(src/)
 
 target_link_libraries(engine PRIVATE
 	utilities
 	vma_usage
-	${Vulkan_LIBRARIES} 
-	)
-target_link_libraries(engine PUBLIC cglm)
+	stb_usage
+	cglm
+	${Vulkan_LIBRARIES}
+)
 target_link_libraries(${PROJECT_NAME}
 	glfw
 	engine
+	cglm
 )
 add_compile_options(-Wall -Wextra -Wpedantic -Werror)

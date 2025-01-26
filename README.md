@@ -74,9 +74,11 @@ $\qquad$ View to screen space matrix (**NOTE** the x and y components have to ha
 ```
 
 # GPU interface
-Each buffer will have the following transformation struct:
+
+## Structs and data format
+For transformations of meshes, we have `TransformationBuffer`:
 ```c
-struct Transformation {
+struct TransformationBuffer {
     vec3 translation;
     vec3 scale;
     vec3 rotation;
@@ -85,9 +87,9 @@ struct Transformation {
 You may recall that in the General transformations section we sent a matrix instead. Well these two are different ways of describing the exact same piece of data so it doesn't matter.
 
 Vertex buffer will store all the vertices that are used by the application. 
-Transformations will be stored separately because many primitives are likely to share the same model to world space transformations.
+Transformations will be stored separately because many primitives are likely to share the same model to world space transformations, and every primitive will have the exact same World to View to Screen space transformations.
 
-Any other data will be stored in the triangle buffer:
+Any other data will be stored in the `TriangleBuffer`:
 ```c
 struct TriangleBuffer {
     uvec3 vertexIndices;
@@ -97,7 +99,7 @@ struct TriangleBuffer {
 };
 ```
 
-Or the Elipsoid buffer:
+Or the `ElipsoidBuffer`:
 ```c
 struct ElipsoidBuffer {
     vec3 position;
@@ -105,3 +107,29 @@ struct ElipsoidBuffer {
     uint transformationIndex;
 }
 ```
+
+`materialIndex` field will be an index to a buffer of the following `struct`:
+```c
+struct MaterialBuffer {
+    float roughness;
+    float refraction;
+    float luminosity;
+    vec3 color;
+    bool isTexturePresent;
+    uint textureIndex;
+    bool isNormalPresent;
+    uint normalIndex;
+}
+```
+If `isTexturePresent` or `isNormalPresent` are `false`, then `textureIndex` and `normalIndex` are ignored respectively.
+
+## Bindings
+buffer | Binding Index
+------- | ---------------
+`renderScreen` | 0
+`TriangleBuffer` | 1
+`ElipsoidBuffer` | 2
+`TransformationBuffer` | 3
+`MaterialBuffer` | 4
+`TextureBuffer` | 5
+`NormalBuffer` | 6

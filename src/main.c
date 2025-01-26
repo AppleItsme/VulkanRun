@@ -17,11 +17,6 @@ EngineResult res;
 Engine *engine_instance = NULL;
 GLFWwindow *window = NULL;
 
-EngineBuffer VSMatrices = {
-	.elementByteSize = sizeof(float),
-	.length = 32,
-};
-
 struct {
 	uint32_t width, height;
 } bufferSize;
@@ -40,8 +35,6 @@ void sendValues() {
 	glm_mat4_transpose(vsMatrix);
 	mat4 svMatrix = {0};
 	glm_mat4_inv(vsMatrix, svMatrix);
-	memcpy(VSMatrices.data, vsMatrix, sizeof(float) * 16);
-	memcpy((float*)VSMatrices.data + 16, svMatrix, sizeof(float) * 16);
 }
 
 
@@ -83,13 +76,13 @@ int main() {
 	EngineInit(&engine_instance, engineCreateInfo, &vkInstance);
 	glfwCreateWindowSurface(vkInstance, window, NULL, &surface);
 	EngineFinishSetup(engine_instance, surface);
+
+
 	glfwGetFramebufferSize(window, &bufferSize.width, &bufferSize.height);
 	glfwSetWindowSizeCallback(window, window_size_callback);
 	EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height);
-	EngineDataTypeInfo dTypes[ENGINE_DATA_TYPE_INFO_LENGTH] = {0};
-	EngineGenerateDataTypeInfo(dTypes);
 
-	res = EngineDeclareDataSet(engine_instance, dTypes, sizeof(dTypes)/sizeof(dTypes[0]));
+	res = EngineDeclareDataSet(engine_instance);
 	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/raytrace.spv", "rb");
 	if(shader == NULL) {
 		printf("womp womp bad path\n");
@@ -113,48 +106,37 @@ int main() {
 	EngineSemaphore drawWaitSemaphore = {0};
 	EngineSemaphore commandDoneSemaphore = {0};
 	EngineCreateSemaphore(engine_instance, &commandDoneSemaphore);
+	EngineMaterial material = {
+		.color = {1,1,1,1},
+		.luminosity = 0,
+		.refraction = 0,
+		.roughness = 1
+	};
+	EngineLoadMaterials(engine_instance, &material, 1);
+	EngineCamera camera = {0};
+	EngineCreateCamera(engine_instance, &camera);
+	memset(&camera.translation, 0, sizeof(vec3));
 
-	EngineBuffer buffer = {
-		.elementByteSize = sizeof(float),
-		.length = 4+4,
+	EngineSphere sphere = {
+		.transformation = (EngineTransformation) {
+			.scale = {1,1,1},
+			.translation = {0,0,1},
+			.rotation = {0,0,0}
+		},
+		.radius = 1,
+		.materialID = material.ID
 	};
-	EngineCreateBuffer(engine_instance, &buffer, ENGINE_BUFFER_STORAGE);
-	EngineCreateBuffer(engine_instance, &VSMatrices, ENGINE_BUFFER_UNIFORM);
-	EngineAttachDataInfo dataInfo = {
-		.binding = 2,
-		.startingIndex = 0,
-		.endIndex = 0,
-		.type = ENGINE_BUFFER_UNIFORM,
-		.content.buffer = VSMatrices
-	};
-	EngineAttachData(engine_instance, &dataInfo);
-	dataInfo = (EngineAttachDataInfo) {
-		.binding = 1,
-		.startingIndex = 0,
-		.endIndex = 0,
-		.type = ENGINE_BUFFER_STORAGE,
-		.content.buffer = buffer
-	};
-	EngineAttachData(engine_instance, &dataInfo);
-	sendValues();
-	vec4 arr = {0, 0, 3, 1};
-	memcpy(buffer.data, arr, sizeof(float) * 4);
-
-	vec4 rotatedSunlight = {0, 1, 0, 2};
-	memcpy((float*)buffer.data+4, &rotatedSunlight, sizeof(float) * 4);
+	EngineCreateSphere(engine_instance, &sphere);
 
 	glfwSetTime(0);
 
-	uint32_t i = 100;
+	uint32_t i = 2;
 
 	while(!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
 		if(isMinimised) {
 			continue;
 		}
-		float time = glfwGetTime();
-		vec4 rotatedSunlight = {-sinf(time), cosf(time), sinf(time), 2};
-		memcpy((float*)buffer.data+4, &rotatedSunlight, sizeof(float) * 4);
 		
 		EngineColor color = {0, 0, 1, 1};
 		res = EngineDrawStart(engine_instance, color, &drawWaitSemaphore);
@@ -170,9 +152,13 @@ int main() {
 		EngineCommandRecordingEnd(engine_instance, cmd);
 		EngineSubmitCommand(engine_instance, cmd, &drawWaitSemaphore, &commandDoneSemaphore);
 		EngineDrawEnd(engine_instance, &commandDoneSemaphore);
+		i--;
+		if(i == 0) {
+			break;
+		}
 	}
-	EngineDestroyBuffer(engine_instance, VSMatrices);
-	EngineDestroyBuffer(engine_instance, buffer);
+	EngineDestroyCamera(engine_instance);
+	EngineUnloadMaterials(engine_instance);
 	EngineSwapchainDestroy(engine_instance);
 	EngineDestroySemaphore(engine_instance, commandDoneSemaphore);
 	EngineDestroy(engine_instance);

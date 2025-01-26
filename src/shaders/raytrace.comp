@@ -4,36 +4,86 @@
 //size of a workgroup for compute
 layout (local_size_x_id = 1, local_size_y_id = 2) in;
 
+struct TransformationInput {
+    vec3 translation;
+    vec3 scale;
+    vec3 rotation;
+};
+
+struct TriangleBuffer {
+    uvec3 vertexIndices;
+    vec2 UVcoords[2];
+    uint materialIndex;
+    uint transformationIndex;
+};
+
+struct SphereBuffer {
+    TransformationInput transformation;
+    float radius;
+    uint materialIndex;
+    bool isActive;
+};
+
+struct MaterialBuffer {
+    float roughness;
+    float refraction;
+    float luminosity;
+    vec4 color;
+    bool isTexturePresent;
+    uint textureIndex;
+    bool isNormalPresent;
+    uint normalIndex;
+};
+
+struct CameraInput {
+    vec3 translation;
+    vec3 scale;
+    vec3 rotation;
+};
+
 //descriptor bindings for the pipeline
 layout(rgba16f, set = 0, binding = 0) uniform image2D renderScreen;
-layout(std140, set = 0, binding = 1) readonly buffer _ {
-    vec3 position;
-    float radius;
-    vec3 sunlight;
-    float power;
-} scene;
-layout(set = 0, binding = 2) uniform _ {
-    mat4 vs;
-    mat4 sv;
-} VSMatrices;
+// layout(binding = 2) readonly buffer triangles {
+//     TriangleBuffer triangleData[];
+// } Triangles;
+layout(binding = 1) readonly buffer spheres {
+    SphereBuffer sphereData[];
+} Spheres;
+layout(binding = 2) readonly buffer transformations {
+    TransformationInput transData[];
+} Transformations;
+layout(binding = 3) uniform materials {
+    MaterialBuffer materialData[10];
+} Materials;
+// layout(binding = 5) uniform sampler2DArray textures;
+// layout(binding = 6) uniform sampler2DArray normals;
 
 #define PI 3.14159
 
 ivec2 imageRes = ivec2(imageSize(renderScreen));  
 
-ivec2 convertToScreenCoordinates(vec4 coords) {
-    coords = vec4(coords.xy/coords.z, 1, 1);
-    coords = VSMatrices.vs * coords;
-    return ivec2(coords.xy);
-}
-
-vec4 convertToViewportCoordinates(ivec2 coords) {
-    vec4 fcoords = vec4(coords,1,1);
-    vec4 curCoords = VSMatrices.sv * fcoords;
-    return curCoords;
-}
 
 //Our viewport has (0,0) in the centre and (1,1) in the top right
+mat4 GenerateTransformationMatrix(TransformationInput t) {
+    mat4 result;
+    vec3 s = vec3(sin(t.rotation.x), sin(t.rotation.y), sin(t.rotation.z));
+    vec3 c = vec3(cos(t.rotation.x), cos(t.rotation.y), cos(t.rotation.z));
+    result[0] = vec4(c.y*c.z, c.y*s.z, s.y, 0);
+    result[1] = vec4(-s.x*s.y*c.z-c.x*s.z, c.x*c.z-s.x*s.y*s.z, s.x*c.y, 0);
+    result[2] = vec4(s.x*s.z-c.x*s.y*c.z, -s.x*c.z-c.x*s.y*s.z, c.x*c.y, 0);
+    result[3] = vec4(0,0,0,1);
+    return result;
+}
+
+vec4 convertToViewportCoordinates(ivec2 p) {
+    return GenerateTransformationMatrix(Transformations.transData[0]) * vec4(p.xy, 0, 1);
+}
+
+ivec2 convertToScreenCoordinates(vec4 p) {
+    return ivec2(
+        (GenerateTransformationMatrix(Transformations.transData[1]) * vec4(p.xy/p.z, p.z, 1)).xy
+    );
+}
 
 vec3 rayGenerate() {
     vec4 unnormalised_direction = convertToViewportCoordinates(ivec2(gl_GlobalInvocationID.xy)); 
@@ -41,14 +91,12 @@ vec3 rayGenerate() {
     return direction;
 }
 
-
 void main() {
-    //shoot a ray
     vec3 rayDir = rayGenerate();
     float a = dot(rayDir, rayDir);
-    float b = -2*dot(rayDir, scene.position);
-    float c = dot(scene.position, scene.position) - scene.radius * scene.radius;
-    float discriminant = pow(-2*dot(rayDir, scene.position), 2)-4*dot(rayDir, rayDir)*(dot(scene.position, scene.position)-pow(scene.radius, 2));
+    float b = -2*dot(rayDir, Spheres.sphereData[0].transformation.translation);
+    float c = dot(Spheres.sphereData[0].transformation.translation, Spheres.sphereData[0].transformation.translation) - Spheres.sphereData[0].radius * Spheres.sphereData[0].radius;
+    float discriminant = pow(-2*dot(rayDir, Spheres.sphereData[0].transformation.translation), 2)-4*dot(rayDir, rayDir)*(dot(Spheres.sphereData[0].transformation.translation, Spheres.sphereData[0].transformation.translation)-pow(Spheres.sphereData[0].radius, 2));
     if(discriminant < 0) {
         return;
     }
@@ -57,12 +105,5 @@ void main() {
     if(secondDistance < intersectionDistance) {
         intersectionDistance = secondDistance;
     }
-    vec3 pointPosition = intersectionDistance * rayDir;
-    if(pointPosition.z < 0.1) {
-        return;
-    }
-    vec3 normal = normalize(pointPosition-scene.position);
-    float luminosity = clamp(-dot(normal, scene.sunlight), 0, 1) * scene.power;
-    vec4 color = vec4(1, 0.25, 0, 1) * (0.1+luminosity);
-    imageStore(renderScreen, ivec2(gl_GlobalInvocationID.xy), color);
+    imageStore(renderScreen, ivec2(gl_GlobalInvocationID.xy), Materials.materialData[Spheres.sphereData[0].materialIndex].color);
 }
