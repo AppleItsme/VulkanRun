@@ -17,6 +17,7 @@ typedef enum {
     ENGINE_BUFFER_STORAGE,
     ENGINE_BUFFER_UNIFORM,
     ENGINE_IMAGE,
+    ENGINE_SAMPLED_IMAGE_ARRAY,
 } EngineDataType;
 
 
@@ -62,10 +63,6 @@ typedef struct {
 } EngineResult;
 
 typedef struct {
-    float r,g,b,a;
-} EngineColor;
-
-typedef struct {
     char *code;
     size_t byteSize;
 } EngineShaderInfo;
@@ -79,11 +76,16 @@ typedef struct {
 } EngineImage;
 
 typedef struct {
-    size_t length;
+    size_t length, count;
     uintptr_t _buffer, _allocation;
     size_t elementByteSize;
     void *data;
 } EngineBuffer;
+
+typedef union {
+    EngineImage image;
+    EngineBuffer buffer;
+} EngineDataContent;
 
 
 typedef uintptr_t EngineSemaphore;
@@ -93,15 +95,21 @@ typedef enum {
     ENGINE_COMMAND_ONE_TIME
 } EngineCommandRecordingType;
 
+typedef struct {
+    float r;
+    float g;
+    float b;
+    float a;
+} EngineColor;
+
 #define MAKE_VERSION(major, minor, patch) ((((uint32_t)(major)) << 22U) | (((uint32_t)(minor)) << 12U) | ((uint32_t)(patch)))
 EngineResult EngineInit(Engine **engine, EngineCI engineCI, uintptr_t *vkInstance);
 EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface);
 void EngineDestroy(Engine *engine);
 
 EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight);
+EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight);
 void EngineSwapchainDestroy(Engine *engine);
-
-uint32_t EngineGetFrame(Engine *engine);
 
 EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemaphore *signalSemaphore);
 EngineResult EngineDrawEnd(Engine *engine, EngineSemaphore *waitSemaphore);
@@ -114,8 +122,6 @@ EngineResult EngineSubmitCommand(Engine *engine, EngineCommand cmd, EngineSemaph
 void EngineDestroyCommand(Engine *engine, EngineCommand cmd);
 
 void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShaderRunInfo runInfo);
-
-#define ENGINE_DATA_TYPE_INFO_LENGTH 3
 
 extern inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo);
 EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount);
@@ -134,6 +140,8 @@ typedef struct {
 } EngineAttachDataInfo;
 #define ENGINE_ATTACH_DATA_ALL_FRAMES 0
 void EngineAttachData(Engine *engine, EngineAttachDataInfo info);
+EngineResult EngineDeclareDataSet(Engine *engine);
+void EngineAttachData(Engine *engine, EngineAttachDataInfo *info);
 
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore);
 void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore);
@@ -144,34 +152,36 @@ void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer);
 EngineResult EngineCreateImage(Engine *engine, EngineImage *engineImage);
 void EngineDestroyImage(Engine *engine, EngineImage engineImage);
 
-
 typedef struct {
-    float roughness, refraction, luminosity;
+    float roughness;
+    float refraction;
+    float luminosity;
     EngineColor color;
+    uint32_t ID;
 } EngineMaterial;
 
-typedef enum {
-    ENGINE_MESH_SPHERE,
-    ENGINE_MESH
-} EngineMeshType;
+typedef struct {
+    vec3 translation;
+    vec3 scale;
+    vec3 rotation;
+} EngineTransformation;
 
 typedef struct {
-    vec3 vertices[3];
-    vec3 textureCoords[3];
-    vec3 normals[3];
-    bool textured;
-} EngineTriangleData;
-
-typedef struct {
+    EngineTransformation transformation;
     float radius;
-} EngineSphereData;
+    uint32_t materialID;
+    uint32_t ID;
+} EngineSphere;
 
-typedef struct {
-    vec3 position;
-    EngineMaterial material;
-    EngineMeshType type;
+void EngineCreateSphere(Engine *engine, EngineSphere *sphere);
+void EngineUpdateSphere(Engine *engine, EngineSphere sphere);
+void EngineDestroySphere(Engine *engine, EngineSphere *sphere);
 
-    EngineSphereData sphere;
-    size_t trianglesCount;
-    EngineTriangleData *triangles;
-} EngineMesh;
+void EngineLoadMaterials(Engine *engine, EngineMaterial *material, size_t materialCount);
+void EngineWriteMaterials(Engine *engine, EngineMaterial *material, size_t materialCount);
+void EngineUnloadMaterials(Engine *engine);
+
+typedef EngineTransformation EngineCamera;
+
+void EngineCreateCamera(Engine *engine, EngineCamera *camera);
+void EngineDestroyCamera(Engine *engine);

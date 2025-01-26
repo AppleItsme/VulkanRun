@@ -40,8 +40,6 @@ void sendValues() {
 	glm_mat4_transpose(vsMatrix);
 	mat4 svMatrix = {0};
 	glm_mat4_inv(vsMatrix, svMatrix);
-	memcpy(VSMatrices.data, vsMatrix, sizeof(float) * 16);
-	memcpy((float*)VSMatrices.data + 16, svMatrix, sizeof(float) * 16);
 }
 
 
@@ -83,15 +81,13 @@ int main() {
 	EngineInit(&engine_instance, engineCreateInfo, &vkInstance);
 	glfwCreateWindowSurface(vkInstance, window, NULL, &surface);
 	EngineFinishSetup(engine_instance, surface);
+
+
 	glfwGetFramebufferSize(window, &bufferSize.width, &bufferSize.height);
 	glfwSetWindowSizeCallback(window, window_size_callback);
 	EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height);
 
-	size_t length = 0;
-	EngineDataTypeInfo dTypes[ENGINE_DATA_TYPE_INFO_LENGTH] = {0};
-	EngineGenerateDataTypeInfo(dTypes);
-	
-	EngineDeclareDataSet(engine_instance, dTypes, ENGINE_DATA_TYPE_INFO_LENGTH);
+	res = EngineDeclareDataSet(engine_instance);
 	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/raytrace.spv", "rb");
 	if(shader == NULL) {
 		printf("womp womp bad path\n");
@@ -175,15 +171,17 @@ int main() {
 		};
 		EngineRunShader(engine_instance, cmd, 0, runInfo);
 		EngineCommandRecordingEnd(engine_instance, cmd);
-		EngineSubmitCommand(engine_instance, cmd, &drawWaitSemaphore[EngineGetFrame(engine_instance)], &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
-		EngineDrawEnd(engine_instance, &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
+		EngineSubmitCommand(engine_instance, cmd, &drawWaitSemaphore, &commandDoneSemaphore);
+		EngineDrawEnd(engine_instance, &commandDoneSemaphore);
+		i--;
+		if(i == 0) {
+			break;
+		}
 	}
-	EngineDestroyBuffer(engine_instance, VSMatrices);
-	EngineDestroyBuffer(engine_instance, buffer);
+	EngineDestroyCamera(engine_instance);
+	EngineUnloadMaterials(engine_instance);
 	EngineSwapchainDestroy(engine_instance);
-	for(int i = 0; i < 2; i++) {
-		EngineDestroySemaphore(engine_instance, commandDoneSemaphore[i]);
-	}
+	EngineDestroySemaphore(engine_instance, commandDoneSemaphore);
 	EngineDestroy(engine_instance);
 	glfwDestroyWindow(window);
 	glfwTerminate();
