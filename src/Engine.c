@@ -27,6 +27,7 @@ typedef struct {
 } vulkanQueue;
 
 #define ENGINE_DATA_TYPE_INFO_LENGTH 4
+#define FRAME_OVERLAP 2
 
 typedef struct {
 	EngineTransformation transformation;
@@ -66,7 +67,7 @@ struct Engine {
 	VkImage *swapchainImages;
 	VkImageView *swapchainImageViews;
 	uint32_t swapchainImageCount;
-	VkFence frameFence;
+	VkFence frameFence[FRAME_OVERLAP];
 
 	VkExtent2D pixelResolution;
 
@@ -75,14 +76,15 @@ struct Engine {
 	uint32_t cur_swapchainIndex;
 	VmaAllocator allocator;
 
-	AllocatedImage renderImage;
+	AllocatedImage renderImages[FRAME_OVERLAP];
 
-	VkSemaphore swapchainSemaphore,
-				frameReadySemaphore,
-				bufferCopySemaphore,
-				tmpSemaphore;
+	VkSemaphore swapchainSemaphores[FRAME_OVERLAP],
+				frameReadySemaphores[FRAME_OVERLAP],
+				bufferCopySemaphores[FRAME_OVERLAP],
+				tmpSemaphores[FRAME_OVERLAP];
 	/*Constant command buffers*/
 	VkCommandBuffer backgroundBuffer, copyBuffer;
+	size_t cur_frame;
 	
 	size_t shaderModulesCount;
 	VkShaderModule *shaderModules;
@@ -543,8 +545,10 @@ EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, ui
 }
 void EngineSwapchainDestroy(Engine *engine) {
 	vkQueueWaitIdle(engine->graphics.queue);
-	vkDestroyImageView(engine->device, engine->renderImage.imageView, NULL);
-	vmaDestroyImage(engine->allocator, engine->renderImage.image, engine->renderImage.allocation);
+	for(size_t i = 0; i < FRAME_OVERLAP; i++) {
+		vkDestroyImageView(engine->device, engine->renderImages[i].imageView, NULL);
+		vmaDestroyImage(engine->allocator, engine->renderImages[i].image, engine->renderImages[i].allocation);
+	}
 	for(int i = 0; i < engine->swapchainImageCount; i++) {
 		vkDestroyImageView(engine->device, engine->swapchainImageViews[i], NULL);
 	}
@@ -675,7 +679,7 @@ EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemap
 
 	VkDescriptorImageInfo renderImageInfo = {
 		.imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-		.imageView = engine->renderImage.imageView,
+		.imageView = engine->renderImages[engine->cur_frame].imageView,
 		.sampler = VK_NULL_HANDLE
 	};
 	VkWriteDescriptorSet writeSet = {
@@ -712,11 +716,11 @@ EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemap
 		.float32 = {background.r, background.g, background.b, background.a}
 	};
 	ChangeImageLayout(engine->backgroundBuffer, 
-				engine->renderImage.image, 
+				engine->renderImages[engine->cur_frame].image, 
 				VK_IMAGE_LAYOUT_UNDEFINED, 
 				VK_IMAGE_LAYOUT_GENERAL,
 				VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
-	vkCmdClearColorImage(engine->backgroundBuffer, engine->renderImage.image, VK_IMAGE_LAYOUT_GENERAL, &backgroundColor, 1, &backgroundSubresourceRange);
+	vkCmdClearColorImage(engine->backgroundBuffer, engine->renderImages[engine->cur_frame].image, VK_IMAGE_LAYOUT_GENERAL, &backgroundColor, 1, &backgroundSubresourceRange);
 	res = vkEndCommandBuffer(engine->backgroundBuffer);
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_PREPARE_FOR_SUBMISSION, res);
 
@@ -731,9 +735,9 @@ EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemap
 		.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
 		.deviceIndex = 0,
 		.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-		.semaphore = engine->frameReadySemaphore
+		.semaphore = engine->frameReadySemaphores[engine->cur_frame]
 	};
-	*signalSemaphore = engine->frameReadySemaphore;
+	*signalSemaphore = engine->frameReadySemaphores[engine->cur_frame];
 
 	VkSubmitInfo2 queueSubmitInfo = {
 		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
@@ -759,14 +763,14 @@ EngineResult EngineDrawEnd(Engine *engine, EngineSemaphore *waitSemaphore) {
 	};
 
 	vkBeginCommandBuffer(engine->copyBuffer, &cmdBeginInfo);
-	ChangeImageLayout(engine->copyBuffer, engine->renderImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+	ChangeImageLayout(engine->copyBuffer, engine->renderImages[engine->cur_frame].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
 	ChangeImageLayout(engine->copyBuffer, engine->swapchainImages[engine->cur_swapchainIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
-	ImageCopy(engine->copyBuffer, engine->renderImage.image, engine->swapchainImages[engine->cur_swapchainIndex], (VkExtent2D){
-		.height = engine->renderImage.imageExtent.height,
-		.width = engine->renderImage.imageExtent.width
+	ImageCopy(engine->copyBuffer, engine->renderImages[engine->cur_frame].image, engine->swapchainImages[engine->cur_swapchainIndex], (VkExtent2D){
+		.height = engine->renderImages[engine->cur_frame].imageExtent.height,
+		.width = engine->renderImages[engine->cur_frame].imageExtent.width
 	}, engine->pixelResolution);
 	ChangeImageLayout(engine->copyBuffer, engine->swapchainImages[engine->cur_swapchainIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
-	ChangeImageLayout(engine->copyBuffer, engine->renderImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+	ChangeImageLayout(engine->copyBuffer, engine->renderImages[engine->cur_frame].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
 	vkEndCommandBuffer(engine->copyBuffer);
 	VkCommandBufferSubmitInfo cmdSubmitInfo = {
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
@@ -780,7 +784,7 @@ EngineResult EngineDrawEnd(Engine *engine, EngineSemaphore *waitSemaphore) {
 			.deviceIndex = 0,
 			.pNext = NULL,
 			.stageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-			.semaphore = engine->swapchainSemaphore
+			.semaphore = engine->swapchainSemaphores[engine->cur_frame]
 		}, 
 		{
 			.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -795,7 +799,7 @@ EngineResult EngineDrawEnd(Engine *engine, EngineSemaphore *waitSemaphore) {
 		.deviceIndex = 0,
 		.pNext = NULL,
 		.stageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-		.semaphore = engine->bufferCopySemaphore
+		.semaphore = engine->bufferCopySemaphores[engine->cur_frame]
 	};
 
 	VkSubmitInfo2 queueSubmitInfo = {
@@ -816,7 +820,7 @@ EngineResult EngineDrawEnd(Engine *engine, EngineSemaphore *waitSemaphore) {
 		.swapchainCount = 1,
 		.pSwapchains = &engine->swapchain,
 		.waitSemaphoreCount = 1,
-		.pWaitSemaphores = &engine->bufferCopySemaphore,
+		.pWaitSemaphores = &engine->bufferCopySemaphores[engine->cur_frame],
 		.pImageIndices = &engine->cur_swapchainIndex,
 	};
 	res = vkQueuePresentKHR(engine->graphics.queue, &presentInfo);
@@ -1000,11 +1004,11 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 	for(int i = 0; i < FRAME_OVERLAP; i++) {
 		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->swapchainSemaphores[i]);
 		ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
-		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->frameReadySemaphore[i]);
+		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->frameReadySemaphores[i]);
 		ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
-		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->bufferCopySemaphore[i]);
+		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->bufferCopySemaphores[i]);
 		ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
-		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->tmpSemaphore[i]);
+		res = vkCreateSemaphore(engine->device, &semaphoreCI, NULL, &engine->tmpSemaphores[i]);
 		ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
 		res = vkCreateFence(engine->device, &fenceCI, NULL, &engine->frameFence[i]);
 		ERR_CHECK(res == VK_SUCCESS, ENGINE_CANNOT_CREATE_SYNCHRONISING_VARIABLES, res);
@@ -1037,9 +1041,9 @@ void EngineDestroy(Engine *engine) {
 
 	for(int i = 0; i < FRAME_OVERLAP; i++) {
 		vkDestroySemaphore(engine->device, engine->swapchainSemaphores[i], NULL);
-		vkDestroySemaphore(engine->device, engine->frameReadySemaphore[i], NULL);
-		vkDestroySemaphore(engine->device, engine->bufferCopySemaphore[i], NULL);
-		vkDestroySemaphore(engine->device, engine->tmpSemaphore[i], NULL);
+		vkDestroySemaphore(engine->device, engine->frameReadySemaphores[i], NULL);
+		vkDestroySemaphore(engine->device, engine->bufferCopySemaphores[i], NULL);
+		vkDestroySemaphore(engine->device, engine->tmpSemaphores[i], NULL);
 		vkDestroyFence(engine->device, engine->frameFence[i], NULL);
 	}
 
@@ -1432,14 +1436,16 @@ void EngineDestroy(Engine *engine) {
 	// 	vkDestroyImageView(engine->device, engine->textureImage.imageView, NULL);
 	// 	vmaDestroyImage(engine->allocator, engine->textureImage.image, engine->textureImage.allocation);
 	// }
-	if(engine->sphereBuffer._buffer != NULL)
-		vmaDestroyBuffer(engine->allocator, engine->sphereBuffer._buffer, engine->sphereBuffer._allocation);
+	// if(engine->sphereBuffer._buffer != NULL)
+	// 	vmaDestroyBuffer(engine->allocator, engine->sphereBuffer._buffer, engine->sphereBuffer._allocation);
 	vmaDestroyAllocator(engine->allocator);
-	vkDestroySemaphore(engine->device, engine->swapchainSemaphore, NULL);
-	vkDestroySemaphore(engine->device, engine->frameReadySemaphore, NULL);
-	vkDestroySemaphore(engine->device, engine->bufferCopySemaphore, NULL);
-	vkDestroySemaphore(engine->device, engine->tmpSemaphore, NULL);
-	vkDestroyFence(engine->device, engine->frameFence, NULL);
+	for(size_t i = 0; i < FRAME_OVERLAP; i++) {
+		vkDestroySemaphore(engine->device, engine->swapchainSemaphores[i], NULL);
+		vkDestroySemaphore(engine->device, engine->frameReadySemaphores[i], NULL);
+		vkDestroySemaphore(engine->device, engine->bufferCopySemaphores[i], NULL);
+		vkDestroySemaphore(engine->device, engine->tmpSemaphores[i], NULL);
+		vkDestroyFence(engine->device, engine->frameFence[i], NULL);
+	}
 
 	DestroyQueue(engine, &engine->graphics);
 	DestroyQueue(engine, &engine->compute);
@@ -1453,319 +1459,246 @@ void EngineDestroy(Engine *engine) {
 
 
 void EngineCreateSphere(Engine *engine, EngineSphere *sphere) {
-	if(engine->sphereBuffer._buffer == NULL) {
-		debug_msg("Creating sphere buffer\n");
-		engine->sphereBuffer.length = 10;
-		engine->sphereBuffer.count = 0;
-		engine->sphereBuffer.elementByteSize = sizeof(GPUSphere);
-		EngineCreateBuffer(engine, &engine->sphereBuffer, ENGINE_BUFFER_STORAGE);
-		vmaMapMemory(engine->allocator, engine->sphereBuffer._allocation, &engine->sphereArr);
-		for(size_t i = 0; i < engine->sphereBuffer.length; i++) {
-			engine->sphereArr->isActive = false;
-		}
-		EngineAttachDataInfo attachInfo = {
-			.binding = BINDING_SPHERE_BUFFER,
-			.content = (EngineDataContent) {.buffer = engine->sphereBuffer._buffer},
-			.startingIndex = 0,
-			.endIndex = 0,
-			.type = ENGINE_BUFFER_STORAGE
-		};
-		EngineAttachData(engine, attachInfo);
-	}
-	debug_msg("Sphere buffer created\n");
-	if(engine->sphereBuffer.count == engine->sphereBuffer.length) {
-		debug_msg("Checking for resize\n");
-		int32_t freeI = -1;
-		for(size_t i = 0; i < engine->sphereBuffer.length; i++) {
-			if(engine->sphereArr[i].isActive)
-				continue;
-			freeI = i;
-			break;
-		}
-		if(freeI != -1) {
-			sphere->ID = freeI;
-			EngineUpdateSphere(engine, *sphere);
-			return;
-		}
-
-		EngineBuffer newBuffer = {
-			.length = engine->sphereBuffer.length * 2,
-			.count = engine->sphereBuffer.count,
-			.elementByteSize = sizeof(GPUSphere)
-		};
-		EngineCreateBuffer(engine, &newBuffer, ENGINE_BUFFER_STORAGE);
-		GPUSphere *newArr = NULL;
-		vmaMapMemory(engine->allocator, newBuffer._allocation, &newArr);
-		memcpy(newArr, engine->sphereArr, sizeof(GPUSphere) * engine->sphereBuffer.length);
-		vmaUnmapMemory(engine->allocator, engine->sphereBuffer._allocation);
-		vmaDestroyBuffer(engine->allocator, engine->sphereBuffer._buffer, engine->sphereBuffer._allocation);
-		engine->sphereBuffer = newBuffer;
-		engine->sphereArr = newArr;
-		sphere->ID = engine->sphereBuffer.count;
-		engine->sphereBuffer.count++;
-		EngineUpdateSphere(engine, *sphere);
-		for(size_t i = engine->sphereBuffer.count; i < engine->sphereBuffer.length; i++) {
-			engine->sphereArr[i].isActive = false;
-		}
-		EngineAttachDataInfo attachInfo = {
-			.binding = BINDING_SPHERE_BUFFER,
-			.content = (EngineDataContent) {.buffer = engine->sphereBuffer._buffer},
-			.startingIndex = 0,
-			.endIndex = 0,
-			.type = ENGINE_BUFFER_STORAGE
-		};
-		EngineAttachData(engine, attachInfo);
-		return;
-	}
-	debug_msg("making first sphere\n");
-	sphere->ID = engine->sphereBuffer.count;
-	EngineUpdateSphere(engine, *sphere);
-	engine->sphereBuffer.count++;
+	
 }
 void EngineUpdateSphere(Engine *engine, EngineSphere sphere) {
-	engine->sphereArr[sphere.ID] = (GPUSphere) {
-		.materialID = sphere.materialID,
-		.radius = sphere.radius,
-		.transformation = sphere.transformation,
-		.isActive = true
-	};
+	
 }
 void EngineDestroySphere(Engine *engine, EngineSphere *sphere) {
-	engine->sphereArr[sphere->ID].isActive = false;
-	sphere->ID = 0;
+	
 }
 
 EngineResult EngineLoadTextures(Engine *engine, size_t textureCount, char **texturePaths) {
-	if(textureCount == 0)
-		return ENGINE_RESULT_SUCCESS;
+	// if(textureCount == 0)
+	// 	return ENGINE_RESULT_SUCCESS;
 
-	engine->textureImage.imageExtent = (VkExtent3D){
-		.width = 256,
-		.height = 256,
-		.depth = 1
-	};
-	size_t textureSize = 0;
-	uint8_t *rawTextures = malloc(sizeof(uint8_t) * textureCount);
-	int x, y = 0;
-	for(size_t i = 0; i < textureCount; i++) {
-		rawTextures[i] = stbi_load(texturePaths[i], &x, &y, NULL, 3);
-		if(x == y && x * y > textureSize) {
-			engine->textureImage.imageExtent.width = x;
-			engine->textureImage.imageExtent.height = y;
-			textureSize = x * y;
-		}
-	}
+	// engine->textureImage.imageExtent = (VkExtent3D){
+	// 	.width = 256,
+	// 	.height = 256,
+	// 	.depth = 1
+	// };
+	// size_t textureSize = 0;
+	// uint8_t *rawTextures = malloc(sizeof(uint8_t) * textureCount);
+	// int x, y = 0;
+	// for(size_t i = 0; i < textureCount; i++) {
+	// 	rawTextures[i] = stbi_load(texturePaths[i], &x, &y, NULL, 3);
+	// 	if(x == y && x * y > textureSize) {
+	// 		engine->textureImage.imageExtent.width = x;
+	// 		engine->textureImage.imageExtent.height = y;
+	// 		textureSize = x * y;
+	// 	}
+	// }
 
-	VkBufferCreateInfo bufferCI = {
-		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-		.pNext = NULL,
-		.queueFamilyIndexCount = 1,
-		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-		.size = textureSize*sizeof(uint8_t)*textureCount,
-		.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
-	};
-	VmaAllocationCreateInfo allocationCI = {
-		.usage = VMA_MEMORY_USAGE_AUTO,
-		.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-	};
-	VmaAllocation bufferAlloc = NULL;
-	VkBuffer stagingBuffer = NULL;
-	vmaCreateBuffer(engine->allocator, &bufferCI, &allocationCI, &stagingBuffer, &bufferAlloc, NULL);
-	uint8_t *bufferMem;
-	vmaMapMemory(engine->allocator, bufferAlloc, &bufferMem);
-	memcpy(bufferMem, rawTextures, sizeof(uint8_t) * textureCount);
-	free(rawTextures);
-	vmaUnmapMemory(engine->allocator, engine->materialBuffer._allocation);
+	// VkBufferCreateInfo bufferCI = {
+	// 	.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+	// 	.pNext = NULL,
+	// 	.queueFamilyIndexCount = 1,
+	// 	.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+	// 	.size = textureSize*sizeof(uint8_t)*textureCount,
+	// 	.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+	// };
+	// VmaAllocationCreateInfo allocationCI = {
+	// 	.usage = VMA_MEMORY_USAGE_AUTO,
+	// 	.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+	// };
+	// VmaAllocation bufferAlloc = NULL;
+	// VkBuffer stagingBuffer = NULL;
+	// vmaCreateBuffer(engine->allocator, &bufferCI, &allocationCI, &stagingBuffer, &bufferAlloc, NULL);
+	// uint8_t *bufferMem;
+	// vmaMapMemory(engine->allocator, bufferAlloc, &bufferMem);
+	// memcpy(bufferMem, rawTextures, sizeof(uint8_t) * textureCount);
+	// free(rawTextures);
+	// vmaUnmapMemory(engine->allocator, engine->materialBuffer._allocation);
 
-	uint32_t queueFamilyIndices[2] = {engine->graphics.index, engine->compute.index};
+	// uint32_t queueFamilyIndices[2] = {engine->graphics.index, engine->compute.index};
 
-	engine->textureImage.imageFormat = VK_FORMAT_R8G8B8_SRGB;
+	// engine->textureImage.imageFormat = VK_FORMAT_R8G8B8_SRGB;
 
-	VkImageCreateInfo textureImageCI = {
-		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-		.pNext = NULL,
-		.imageType = VK_IMAGE_TYPE_2D,
-		.arrayLayers = textureCount,
-		.format = engine->textureImage.imageFormat,
-		.extent = engine->textureImage.imageExtent,
-		.mipLevels = 1,
-		.samples = VK_SAMPLE_COUNT_1_BIT,
-		.tiling = VK_IMAGE_TILING_OPTIMAL,
-		.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-		.queueFamilyIndexCount = 2,
-		.pQueueFamilyIndices = &queueFamilyIndices
-	};
- 	allocationCI = (VmaAllocationCreateInfo){
-		.usage = VMA_MEMORY_USAGE_AUTO,
-		.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
-		.priority = 1
-	};
-	res = vmaCreateImage(engine->allocator, &textureImageCI, &allocationCI, &engine->textureImage.image, &engine->textureImage.allocation, NULL);
-	ERR_CHECK(res == VK_SUCCESS, ENGINE_IMAGE_VIEW_FAILED, res);
-	VkImageViewCreateInfo imageViewCI = {
-		.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-		.pNext = NULL,
-		.image = engine->textureImage.image,
-		.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-		.format = engine->textureImage.imageFormat,
-		.components = {0},
-		.subresourceRange = (VkImageSubresourceRange) {
-			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-			.baseArrayLayer = 0,
-			.layerCount = VK_REMAINING_ARRAY_LAYERS,
-			.baseMipLevel = 0,
-			.levelCount = 1
-		}
-	};
-	vkCreateImageView(engine->device, &imageViewCI, NULL, &engine->textureImage.imageView);
-	ERR_CHECK(res == VK_SUCCESS, ENGINE_IMAGE_VIEW_FAILED, res);
+	// VkImageCreateInfo textureImageCI = {
+	// 	.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+	// 	.pNext = NULL,
+	// 	.imageType = VK_IMAGE_TYPE_2D,
+	// 	.arrayLayers = textureCount,
+	// 	.format = engine->textureImage.imageFormat,
+	// 	.extent = engine->textureImage.imageExtent,
+	// 	.mipLevels = 1,
+	// 	.samples = VK_SAMPLE_COUNT_1_BIT,
+	// 	.tiling = VK_IMAGE_TILING_OPTIMAL,
+	// 	.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+	// 	.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+	// 	.queueFamilyIndexCount = 2,
+	// 	.pQueueFamilyIndices = &queueFamilyIndices
+	// };
+ 	// allocationCI = (VmaAllocationCreateInfo){
+	// 	.usage = VMA_MEMORY_USAGE_AUTO,
+	// 	.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+	// 	.priority = 1
+	// };
+	// res = vmaCreateImage(engine->allocator, &textureImageCI, &allocationCI, &engine->textureImage.image, &engine->textureImage.allocation, NULL);
+	// ERR_CHECK(res == VK_SUCCESS, ENGINE_IMAGE_VIEW_FAILED, res);
+	// VkImageViewCreateInfo imageViewCI = {
+	// 	.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+	// 	.pNext = NULL,
+	// 	.image = engine->textureImage.image,
+	// 	.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+	// 	.format = engine->textureImage.imageFormat,
+	// 	.components = {0},
+	// 	.subresourceRange = (VkImageSubresourceRange) {
+	// 		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+	// 		.baseArrayLayer = 0,
+	// 		.layerCount = VK_REMAINING_ARRAY_LAYERS,
+	// 		.baseMipLevel = 0,
+	// 		.levelCount = 1
+	// 	}
+	// };
+	// vkCreateImageView(engine->device, &imageViewCI, NULL, &engine->textureImage.imageView);
+	// ERR_CHECK(res == VK_SUCCESS, ENGINE_IMAGE_VIEW_FAILED, res);
 
-	VkCommandBufferAllocateInfo cmdAllocInfo = {
-		.commandBufferCount = 1,
-		.commandPool = engine->graphics.pool,
-		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-		.pNext = NULL
-	};
-	VkCommandBuffer copyBuff;
-	vkAllocateCommandBuffers(engine->device, &cmdAllocInfo, &copyBuff);
-	VkCommandBufferBeginInfo beginInfo = {
-		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-		.pNext = NULL,
-		.pInheritanceInfo = NULL,
-		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
-	};
-	vkBeginCommandBuffer(copyBuff, &beginInfo);
+	// VkCommandBufferAllocateInfo cmdAllocInfo = {
+	// 	.commandBufferCount = 1,
+	// 	.commandPool = engine->graphics.pool,
+	// 	.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+	// 	.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+	// 	.pNext = NULL
+	// };
+	// VkCommandBuffer copyBuff;
+	// vkAllocateCommandBuffers(engine->device, &cmdAllocInfo, &copyBuff);
+	// VkCommandBufferBeginInfo beginInfo = {
+	// 	.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+	// 	.pNext = NULL,
+	// 	.pInheritanceInfo = NULL,
+	// 	.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+	// };
+	// vkBeginCommandBuffer(copyBuff, &beginInfo);
 
-	VkBufferImageCopy imageCopy = {
-		.bufferImageHeight = y,
-		.bufferRowLength = x,
-		.imageExtent = engine->textureImage.imageExtent,
-		.imageSubresource = (VkImageSubresourceLayers) {
-			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-			.baseArrayLayer = 0,
-			.layerCount = VK_REMAINING_ARRAY_LAYERS,
-			.mipLevel = 0
-		},
-	};
-	ChangeImageLayout(copyBuff, engine->textureImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
-	vkCmdCopyBufferToImage(copyBuff, stagingBuffer, engine->textureImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &imageCopy);
-	ChangeImageLayout(copyBuff, engine->textureImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
-	vkEndCommandBuffer(copyBuff);
-	VkSubmitInfo queueSubmitInfo = {
-		.commandBufferCount = 1,
-		.pCommandBuffers = &copyBuff,
-		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-		.pNext = NULL,
-		.signalSemaphoreCount = 0,
-		.waitSemaphoreCount = 0
-	};
-	VkFenceCreateInfo fenceCI = {
-		.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-		.pNext = NULL
-	};
-	VkFence fence;
-	vkCreateFence(engine->device, &fenceCI, NULL, &fence);
-	vkQueueSubmit(engine->graphics.queue, 1, &queueSubmitInfo, fence);
+	// VkBufferImageCopy imageCopy = {
+	// 	.bufferImageHeight = y,
+	// 	.bufferRowLength = x,
+	// 	.imageExtent = engine->textureImage.imageExtent,
+	// 	.imageSubresource = (VkImageSubresourceLayers) {
+	// 		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+	// 		.baseArrayLayer = 0,
+	// 		.layerCount = VK_REMAINING_ARRAY_LAYERS,
+	// 		.mipLevel = 0
+	// 	},
+	// };
+	// ChangeImageLayout(copyBuff, engine->textureImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+	// vkCmdCopyBufferToImage(copyBuff, stagingBuffer, engine->textureImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &imageCopy);
+	// ChangeImageLayout(copyBuff, engine->textureImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+	// vkEndCommandBuffer(copyBuff);
+	// VkSubmitInfo queueSubmitInfo = {
+	// 	.commandBufferCount = 1,
+	// 	.pCommandBuffers = &copyBuff,
+	// 	.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+	// 	.pNext = NULL,
+	// 	.signalSemaphoreCount = 0,
+	// 	.waitSemaphoreCount = 0
+	// };
+	// VkFenceCreateInfo fenceCI = {
+	// 	.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+	// 	.pNext = NULL
+	// };
+	// VkFence fence;
+	// vkCreateFence(engine->device, &fenceCI, NULL, &fence);
+	// vkQueueSubmit(engine->graphics.queue, 1, &queueSubmitInfo, fence);
 
-	vkWaitForFences(engine->device, 1, &fence, true, 1000000000);
-	vkDestroyFence(engine->device, fence, NULL);
-	vmaDestroyBuffer(engine->allocator, stagingBuffer, bufferAlloc);
+	// vkWaitForFences(engine->device, 1, &fence, true, 1000000000);
+	// vkDestroyFence(engine->device, fence, NULL);
+	// vmaDestroyBuffer(engine->allocator, stagingBuffer, bufferAlloc);
 
-	VkSamplerCreateInfo samplerCI = {
-		.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-		.pNext = NULL,
-		.anisotropyEnable = false,
-		.magFilter = VK_FILTER_NEAREST,
-		.minFilter = VK_FILTER_NEAREST,
-		.compareEnable = false,
-		.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR
-	};
-	vkCreateSampler(engine->device, &samplerCI, NULL, &engine->sampler);
+	// VkSamplerCreateInfo samplerCI = {
+	// 	.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+	// 	.pNext = NULL,
+	// 	.anisotropyEnable = false,
+	// 	.magFilter = VK_FILTER_NEAREST,
+	// 	.minFilter = VK_FILTER_NEAREST,
+	// 	.compareEnable = false,
+	// 	.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR
+	// };
+	// vkCreateSampler(engine->device, &samplerCI, NULL, &engine->sampler);
 
-	EngineAttachDataInfo attachInfo = {
-		.binding = 5,
-		.content = engine->textureImage.image,
-		.startingIndex = 0,
-		.endIndex = textureCount,
-		.type = ENGINE_SAMPLED_IMAGE_ARRAY
-	};
-	EngineAttachData(engine, attachInfo);
-	debug_msg("Textures were loaded successfully\n");
-	return ENGINE_RESULT_SUCCESS;
+	// EngineAttachDataInfo attachInfo = {
+	// 	.binding = 5,
+	// 	.content = engine->textureImage.image,
+	// 	.startingIndex = 0,
+	// 	.endIndex = textureCount,
+	// 	.type = ENGINE_SAMPLED_IMAGE_ARRAY
+	// };
+	// EngineAttachData(engine, attachInfo);
+	// debug_msg("Textures were loaded successfully\n");
+	// return ENGINE_RESULT_SUCCESS;
 };
 
 void EngineUnloadTextures(Engine *engine) {
-	vkDestroySampler(engine->device, engine->sampler, NULL);
-	vmaDestroyImage(engine->allocator, engine->textureImage.image, engine->textureImage.allocation);
+	// vkDestroySampler(engine->device, engine->sampler, NULL);
+	// vmaDestroyImage(engine->allocator, engine->textureImage.image, engine->textureImage.allocation);
 }
 
 void EngineLoadMaterials(Engine *engine, EngineMaterial *material, size_t materialCount) {
-	VkBufferCreateInfo buffCI = {
-		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-		.pNext = NULL,
-		.queueFamilyIndexCount = 1,
-		.pQueueFamilyIndices = &engine->compute.index,
-		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-		.size = sizeof(GPUMaterial) * materialCount,
-		.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
-	};
-	VmaAllocationCreateInfo allocCI = {
-		.usage = VMA_MEMORY_USAGE_AUTO,
-		.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-	};
-	vmaCreateBuffer(engine->allocator, &buffCI, &allocCI, &engine->materialBuffer._buffer, &engine->materialBuffer._allocation, NULL);
-	for(size_t i = 0; i < materialCount; i++) {
-		material[i].ID = i;
-	}
-	EngineWriteMaterials(engine, material, materialCount);
-	EngineAttachDataInfo attachInfo = {
-		.binding = BINDING_MATERIAL_BUFFER,
-		.content = (EngineDataContent){.buffer = engine->materialBuffer._buffer},
-		.startingIndex = 0,
-		.endIndex = 0,
-		.type = ENGINE_BUFFER_STORAGE
-	};
-	EngineAttachData(engine, attachInfo);
-	debug_msg("materials loaded\n");
+	// VkBufferCreateInfo buffCI = {
+	// 	.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+	// 	.pNext = NULL,
+	// 	.queueFamilyIndexCount = 1,
+	// 	.pQueueFamilyIndices = &engine->compute.index,
+	// 	.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+	// 	.size = sizeof(GPUMaterial) * materialCount,
+	// 	.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
+	// };
+	// VmaAllocationCreateInfo allocCI = {
+	// 	.usage = VMA_MEMORY_USAGE_AUTO,
+	// 	.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+	// };
+	// vmaCreateBuffer(engine->allocator, &buffCI, &allocCI, &engine->materialBuffer._buffer, &engine->materialBuffer._allocation, NULL);
+	// for(size_t i = 0; i < materialCount; i++) {
+	// 	material[i].ID = i;
+	// }
+	// EngineWriteMaterials(engine, material, materialCount);
+	// EngineAttachDataInfo attachInfo = {
+	// 	.binding = BINDING_MATERIAL_BUFFER,
+	// 	.content = (EngineDataContent){.buffer = engine->materialBuffer._buffer},
+	// 	.startingIndex = 0,
+	// 	.endIndex = 0,
+	// 	.type = ENGINE_BUFFER_STORAGE
+	// };
+	// EngineAttachData(engine, attachInfo);
+	// debug_msg("materials loaded\n");
 };
 
 void EngineWriteMaterials(Engine *engine, EngineMaterial *material, size_t materialCount) {
-	GPUMaterial *materialMem = NULL;
-	vmaMapMemory(engine->allocator, engine->materialBuffer._allocation, &materialMem);
-	for(size_t i = 0; i < materialCount; i++) {
-		materialMem[material[i].ID] = (GPUMaterial) {
-			.color = material[i].color,
-			.luminosity = material[i].luminosity,
-			.refraction = material[i].refraction,
-			.roughness = material[i].roughness
-		};
-	}
-	vmaUnmapMemory(engine->allocator, engine->materialBuffer._allocation);
+	// GPUMaterial *materialMem = NULL;
+	// vmaMapMemory(engine->allocator, engine->materialBuffer._allocation, &materialMem);
+	// for(size_t i = 0; i < materialCount; i++) {
+	// 	materialMem[material[i].ID] = (GPUMaterial) {
+	// 		.color = material[i].color,
+	// 		.luminosity = material[i].luminosity,
+	// 		.refraction = material[i].refraction,
+	// 		.roughness = material[i].roughness
+	// 	};
+	// }
+	// vmaUnmapMemory(engine->allocator, engine->materialBuffer._allocation);
 }
 
 void EngineUnloadMaterials(Engine *engine) {
-	vmaDestroyBuffer(engine->allocator, engine->materialBuffer._buffer, engine->materialBuffer._allocation);
+	// vmaDestroyBuffer(engine->allocator, engine->materialBuffer._buffer, engine->materialBuffer._allocation);
 }
 
 void EngineCreateCamera(Engine *engine, EngineCamera *camera) {
-	engine->cameraBuffer = (EngineBuffer) {
-		.length = 1,
-		.elementByteSize = sizeof(EngineCamera),
-	};
-	EngineCreateBuffer(engine, &engine->cameraBuffer, ENGINE_BUFFER_STORAGE);
-	EngineAttachDataInfo attachInfo = {
-		.binding = BINDING_TRANSFORMATION_BUFFER,
-		.content = {.buffer = engine->cameraBuffer._buffer},
-		.startingIndex = 0,
-		.endIndex = 0,
-		.type = ENGINE_BUFFER_STORAGE
-	};
-	EngineAttachData(engine, attachInfo);
-	vmaMapMemory(engine->allocator, engine->cameraBuffer._allocation, &camera);
+	// engine->cameraBuffer = (EngineBuffer) {
+	// 	.length = 1,
+	// 	.elementByteSize = sizeof(EngineCamera),
+	// };
+	// EngineCreateBuffer(engine, &engine->cameraBuffer, ENGINE_BUFFER_STORAGE);
+	// EngineAttachDataInfo attachInfo = {
+	// 	.binding = BINDING_TRANSFORMATION_BUFFER,
+	// 	.content = {.buffer = engine->cameraBuffer._buffer},
+	// 	.startingIndex = 0,
+	// 	.endIndex = 0,
+	// 	.type = ENGINE_BUFFER_STORAGE
+	// };
+	// EngineAttachData(engine, attachInfo);
+	// vmaMapMemory(engine->allocator, engine->cameraBuffer._allocation, &camera);
 }
 void EngineDestroyCamera(Engine *engine) {
-	vmaUnmapMemory(engine->allocator, engine->cameraBuffer._allocation);
-	EngineDestroyBuffer(engine, engine->cameraBuffer);
+	// vmaUnmapMemory(engine->allocator, engine->cameraBuffer._allocation);
+	// EngineDestroyBuffer(engine, engine->cameraBuffer);
 }

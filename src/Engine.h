@@ -141,7 +141,6 @@ typedef struct {
 #define ENGINE_ATTACH_DATA_ALL_FRAMES 0
 void EngineAttachData(Engine *engine, EngineAttachDataInfo info);
 EngineResult EngineDeclareDataSet(Engine *engine);
-void EngineAttachData(Engine *engine, EngineAttachDataInfo *info);
 
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore);
 void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore);

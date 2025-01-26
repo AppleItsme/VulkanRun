@@ -173,10 +173,6 @@ int main() {
 		EngineCommandRecordingEnd(engine_instance, cmd);
 		EngineSubmitCommand(engine_instance, cmd, &drawWaitSemaphore, &commandDoneSemaphore);
 		EngineDrawEnd(engine_instance, &commandDoneSemaphore);
-		i--;
-		if(i == 0) {
-			break;
-		}
 	}
 	EngineDestroyCamera(engine_instance);
 	EngineUnloadMaterials(engine_instance);
