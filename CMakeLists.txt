@@ -22,6 +22,7 @@ include_directories(${Vulkan_INCLUDE_DIRS})
 add_executable(${PROJECT_NAME} src/main.c)
 add_library(engine src/Engine.c)
 add_library(vma_usage src/vma.cpp)
+add_library(utilities src/utils.c)
 
 target_include_directories(vma_usage PRIVATE ThirdParty/VulkanMemoryAllocator/include)
 
@@ -37,6 +38,7 @@ target_link_libraries(engine PRIVATE
 	vma_usage
 	${Vulkan_LIBRARIES} 
 	cglm
+	utilities
 	)
 target_link_libraries(${PROJECT_NAME}
 	glfw

@@ -85,16 +85,6 @@ typedef struct {
     void *data;
 } EngineBuffer;
 
-typedef struct {
-    uint32_t startingIndex, 
-            endIndex,
-            binding;
-    EngineDataType type;
-    union {
-        EngineImage image;
-        EngineBuffer buffer;
-    } content;
-} EngineWriteDataInfo;
 
 typedef uintptr_t EngineSemaphore;
 typedef uintptr_t EngineCommand;
@@ -108,7 +98,7 @@ EngineResult EngineInit(Engine **engine, EngineCI engineCI, uintptr_t *vkInstanc
 EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface);
 void EngineDestroy(Engine *engine);
 
-EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight, EngineImage *renderImages);
+EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight);
 void EngineSwapchainDestroy(Engine *engine);
 
 uint32_t EngineGetFrame(Engine *engine);
@@ -129,7 +119,21 @@ void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShad
 
 extern inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo);
 EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount);
-void EngineWriteData(Engine *engine, EngineWriteDataInfo *info);
+
+typedef struct {
+    uint32_t startingIndex, 
+            endIndex,
+            binding;
+    EngineDataType type;
+    union {
+        EngineImage image;
+        EngineBuffer buffer;
+    } content;
+    bool nextFrame;
+    size_t applyCount;
+} EngineAttachDataInfo;
+#define ENGINE_ATTACH_DATA_ALL_FRAMES 0
+void EngineAttachData(Engine *engine, EngineAttachDataInfo info);
 
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore);
 void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore);
@@ -140,8 +144,6 @@ void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer);
 EngineResult EngineCreateImage(Engine *engine, EngineImage *engineImage);
 void EngineDestroyImage(Engine *engine, EngineImage engineImage);
 
-
-typedef vec4 EngineColor;
 
 typedef struct {
     float roughness, refraction, luminosity;
