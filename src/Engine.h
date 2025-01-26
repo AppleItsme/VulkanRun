@@ -87,13 +87,6 @@ typedef union {
     EngineBuffer buffer;
 } EngineDataContent;
 
-typedef struct {
-    uint32_t startingIndex, 
-            endIndex,
-            binding;
-    EngineDataType type;
-    EngineDataContent content;
-} EngineAttachDataInfo;
 
 typedef uintptr_t EngineSemaphore;
 typedef uintptr_t EngineCommand;
@@ -115,6 +108,7 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface);
 void EngineDestroy(Engine *engine);
 
 EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight);
+EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight);
 void EngineSwapchainDestroy(Engine *engine);
 
 EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemaphore *signalSemaphore);
@@ -130,6 +124,22 @@ void EngineDestroyCommand(Engine *engine, EngineCommand cmd);
 void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShaderRunInfo runInfo);
 
 extern inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo);
+EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount);
+
+typedef struct {
+    uint32_t startingIndex, 
+            endIndex,
+            binding;
+    EngineDataType type;
+    union {
+        EngineImage image;
+        EngineBuffer buffer;
+    } content;
+    bool nextFrame;
+    size_t applyCount;
+} EngineAttachDataInfo;
+#define ENGINE_ATTACH_DATA_ALL_FRAMES 0
+void EngineAttachData(Engine *engine, EngineAttachDataInfo info);
 EngineResult EngineDeclareDataSet(Engine *engine);
 void EngineAttachData(Engine *engine, EngineAttachDataInfo *info);
 

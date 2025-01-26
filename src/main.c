@@ -17,6 +17,11 @@ EngineResult res;
 Engine *engine_instance = NULL;
 GLFWwindow *window = NULL;
 
+EngineBuffer VSMatrices = {
+	.elementByteSize = sizeof(float),
+	.length = 32,
+};
+
 struct {
 	uint32_t width, height;
 } bufferSize;
@@ -103,43 +108,59 @@ int main() {
 	res = EngineLoadShaders(engine_instance, &shaderInfo, 1);
 	free(shaderCode);
 
-	EngineSemaphore drawWaitSemaphore = {0};
-	EngineSemaphore commandDoneSemaphore = {0};
-	EngineCreateSemaphore(engine_instance, &commandDoneSemaphore);
-	EngineMaterial material = {
-		.color = {1,1,1,1},
-		.luminosity = 0,
-		.refraction = 0,
-		.roughness = 1
-	};
-	EngineLoadMaterials(engine_instance, &material, 1);
-	EngineCamera camera = {0};
-	EngineCreateCamera(engine_instance, &camera);
-	memset(&camera.translation, 0, sizeof(vec3));
+	EngineSemaphore drawWaitSemaphore[2] = {0};
+	EngineSemaphore commandDoneSemaphore[2] = {0};
+	for(int i = 0; i < 2; i++) {
+		EngineCreateSemaphore(engine_instance, &commandDoneSemaphore[i]);
+	}
 
-	EngineSphere sphere = {
-		.transformation = (EngineTransformation) {
-			.scale = {1,1,1},
-			.translation = {0,0,1},
-			.rotation = {0,0,0}
-		},
-		.radius = 1,
-		.materialID = material.ID
+	EngineBuffer buffer = {
+		.elementByteSize = sizeof(float),
+		.length = 4+4,
 	};
-	EngineCreateSphere(engine_instance, &sphere);
+	EngineCreateBuffer(engine_instance, &buffer, ENGINE_BUFFER_STORAGE);
+	EngineCreateBuffer(engine_instance, &VSMatrices, ENGINE_BUFFER_UNIFORM);
+
+	sendValues();
 
 	glfwSetTime(0);
-
-	uint32_t i = 2;
+	EngineAttachDataInfo dataInfo = (EngineAttachDataInfo) {
+		.binding = 1,
+		.startingIndex = 0,
+		.endIndex = 0,
+		.type = ENGINE_BUFFER_STORAGE,
+		.content.buffer = buffer,
+		.applyCount = ENGINE_ATTACH_DATA_ALL_FRAMES,
+		.nextFrame = false
+	};
+	EngineAttachData(engine_instance, dataInfo);
+	dataInfo = (EngineAttachDataInfo) {
+		.binding = 2,
+		.startingIndex = 0,
+		.endIndex = 0,
+		.type = ENGINE_BUFFER_UNIFORM,
+		.content.buffer = VSMatrices,
+		.applyCount = ENGINE_ATTACH_DATA_ALL_FRAMES,
+		.nextFrame = false
+	};
+	EngineAttachData(engine_instance, dataInfo);
 
 	while(!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
 		if(isMinimised) {
 			continue;
 		}
+		EngineColor Color = {0, 0, 1, 1};
+		res = EngineDrawStart(engine_instance, Color, &drawWaitSemaphore[EngineGetFrame(engine_instance)]);
+
+		float time = glfwGetTime();
+		vec4 arr = {0, 0, 3 + sinf(time), 1};
+		memcpy(buffer.data, arr, sizeof(float) * 4);
+
+		vec4 rotatedSunlight = {-sinf(time), cosf(time), sinf(time), 1};
+		memcpy((float*)buffer.data+4, &rotatedSunlight, sizeof(float) * 4);
 		
-		EngineColor color = {0, 0, 1, 1};
-		res = EngineDrawStart(engine_instance, color, &drawWaitSemaphore);
+		
 		EngineCommand cmd = 0;
 		EngineCreateCommand(engine_instance, &cmd);
 		EngineCommandRecordingStart(engine_instance, cmd, ENGINE_COMMAND_ONE_TIME);
