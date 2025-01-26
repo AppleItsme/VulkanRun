@@ -161,7 +161,7 @@ int main() {
 		vec4 arr = {0, 0, 3 + sinf(time), 1};
 		memcpy(buffer.data, arr, sizeof(float) * 4);
 
-		vec4 rotatedSunlight = {-sinf(time), cosf(time), sinf(time), 2};
+		vec4 rotatedSunlight = {-sinf(time), cosf(time), sinf(time), 1};
 		memcpy((float*)buffer.data+4, &rotatedSunlight, sizeof(float) * 4);
 		
 		
