@@ -21,6 +21,7 @@ typedef enum {
 } EngineDataType;
 
 
+#define ENGINE_DATATYPE_INFO_LENGTH 4
 typedef struct {
     EngineDataType type;
     uint32_t bindingIndex, count;
@@ -79,6 +80,7 @@ typedef struct {
     size_t length, count;
     uintptr_t _buffer, _allocation;
     size_t elementByteSize;
+    bool isAccessible;
     void *data;
 } EngineBuffer;
 
@@ -140,22 +142,27 @@ typedef struct {
 } EngineAttachDataInfo;
 #define ENGINE_ATTACH_DATA_ALL_FRAMES 0
 void EngineAttachData(Engine *engine, EngineAttachDataInfo info);
-EngineResult EngineDeclareDataSet(Engine *engine);
 
 EngineResult EngineCreateSemaphore(Engine *engine, EngineSemaphore *semaphore);
 void EngineDestroySemaphore(Engine *engine, EngineSemaphore semaphore);
+uint32_t EngineGetFrame(Engine *engine);
 
 EngineResult EngineCreateBuffer(Engine *engine, EngineBuffer *engineBuffer, EngineDataType type);
+void EngineBufferAccessUpdate(Engine *engine, EngineBuffer *buffer, bool setAccessVal);
 void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer);
 
 EngineResult EngineCreateImage(Engine *engine, EngineImage *engineImage);
 void EngineDestroyImage(Engine *engine, EngineImage engineImage);
 
 typedef struct {
-    float roughness;
+	float roughness;
     float refraction;
     float luminosity;
     EngineColor color;
+	bool isTexturePresent;
+    uint32_t textureIndex;
+    bool isNormalPresent;
+    uint32_t normalIndex;
     uint32_t ID;
 } EngineMaterial;
 
@@ -169,11 +176,12 @@ typedef struct {
     EngineTransformation transformation;
     float radius;
     uint32_t materialID;
+    bool isActive;
     uint32_t ID;
 } EngineSphere;
 
-void EngineCreateSphere(Engine *engine, EngineSphere *sphere);
-void EngineUpdateSphere(Engine *engine, EngineSphere sphere);
+void EngineCreateSphere(Engine *engine, EngineSphere *sphereInfo, EngineSphere *sphereOut);
+void EngineUpdateSphere(Engine *engine, EngineSphere *sphere);
 void EngineDestroySphere(Engine *engine, EngineSphere *sphere);
 
 void EngineLoadMaterials(Engine *engine, EngineMaterial *material, size_t materialCount);

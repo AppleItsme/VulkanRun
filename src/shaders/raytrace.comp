@@ -2,20 +2,55 @@
 #version 460
 
 //size of a workgroup for compute
-layout (local_size_x_id=1, local_size_y_id=2) in;
+layout (local_size_x_id = 1, local_size_y_id = 2, local_size_z = 1) in;
+
+struct TransformationInput {
+    float translation[3];
+    float scale[3];
+    float rotation[3];
+};
+
+struct TriangleBuffer {
+    uint vertexIndices[3];
+    vec2 UVcoords[2];
+    uint materialIndex;
+    uint transformationIndex;
+};
+
+struct SphereBuffer {
+    TransformationInput transformation;
+    float radius;
+    uint materialIndex;
+    bool isActive;
+};
+
+struct MaterialBuffer {
+    float roughness;
+    float refraction;
+    float luminosity;
+    vec4 color;
+    bool isTexturePresent;
+    uint textureIndex;
+    bool isNormalPresent;
+    uint normalIndex;
+};
 
 //descriptor bindings for the pipeline
 layout(rgba16f, set = 0, binding = 0) uniform image2D renderScreen;
-layout(std140, binding = 1) readonly buffer _ {
-    vec3 position;
-    float radius;
-    vec3 sunlight;
-    float power;
-} scene;
-layout(binding = 2) uniform _ {
-    mat4 vs;
-    mat4 sv;
-} VSMatrices;
+// layout(binding = 2) readonly buffer triangles {
+//     TriangleBuffer triangleData[];
+// } Triangles;
+layout(binding = 1) readonly buffer spheres {
+    SphereBuffer Spheres[];
+};
+layout(binding = 2) readonly buffer transformations {
+    TransformationInput Transformations[];
+};
+layout(binding = 3) uniform materials {
+    MaterialBuffer Materials[1];
+};
+// layout(binding = 5) uniform sampler2DArray textures;
+// layout(binding = 6) uniform sampler2DArray normals;
 
 #define PI 3.14159
 
@@ -24,28 +59,38 @@ ivec2 imageRes = ivec2(imageSize(renderScreen));
 
 //Our viewport has (0,0) in the centre and (1,1) in the top right
 mat4 GenerateTransformationMatrix(TransformationInput t) {
-    mat4 result;
-    vec3 s = vec3(sin(t.rotation.x), sin(t.rotation.y), sin(t.rotation.z));
-    vec3 c = vec3(cos(t.rotation.x), cos(t.rotation.y), cos(t.rotation.z));
-    result[0] = vec4(c.y*c.z, c.y*s.z, s.y, 0);
-    result[1] = vec4(-s.x*s.y*c.z-c.x*s.z, c.x*c.z-s.x*s.y*s.z, s.x*c.y, 0);
-    result[2] = vec4(s.x*s.z-c.x*s.y*c.z, -s.x*c.z-c.x*s.y*s.z, c.x*c.y, 0);
-    result[3] = vec4(0,0,0,1);
+    vec3 s = vec3(sin(t.rotation[0]), sin(t.rotation[1]), sin(t.rotation[2]));
+    vec3 c = vec3(cos(t.rotation[0]), cos(t.rotation[1]), cos(t.rotation[2]));
+    mat4 result = mat4(
+        t.scale[0]*c[1]*c[2], c[1]*s[2], s[1], 0,
+        -s[0]*s[1]*c[2]-c[0]*s[2], t.scale[1]*(c[0]*c[2]-s[0]*s[1]*s[2]), s[0]*c[1], 0,
+        s[0]*s[2]-c[0]*s[1]*c[2], -s[0]*c[2]-c[0]*s[1]*s[2], t.scale[2]*c[0]*c[1], 0,
+        t.translation[0], t.translation[1], t.translation[2],1
+    );
     return result;
 }
 
+vec3 ArrToVec3(float arr[3]) {
+    return vec3(arr[0], arr[1], arr[2]);
+}
+
+mat4 ViewportScreenspace = GenerateTransformationMatrix(Transformations[0]);
+mat4 ScreenspaceViewport = GenerateTransformationMatrix(Transformations[1]);
+
 vec4 convertToViewportCoordinates(ivec2 p) {
-    return GenerateTransformationMatrix(Transformations.transData[0]) * vec4(p.xy, 0, 1);
+    vec4 vec = vec4(p.xy, 1, 1);
+    vec4 result = ScreenspaceViewport * vec;
+    return result;
 }
 
 ivec2 convertToScreenCoordinates(vec4 p) {
     return ivec2(
-        (GenerateTransformationMatrix(Transformations.transData[1]) * vec4(p.xy/p.z, p.z, 1)).xy
+        (ViewportScreenspace * vec4(p.xy/p.z, p.z, 1)).xy
     );
 }
 
 vec3 rayGenerate() {
-    vec4 unnormalised_direction = convertToViewportCoordinates(ivec2(gl_GlobalInvocationID.xy)); 
+    vec4 unnormalised_direction = convertToViewportCoordinates(ivec2(gl_GlobalInvocationID.xy));
     vec3 direction = normalize(unnormalised_direction.xyz);
     return direction;
 }
@@ -53,16 +98,17 @@ vec3 rayGenerate() {
 void main() {
     vec3 rayDir = rayGenerate();
     float a = dot(rayDir, rayDir);
-    float b = -2*dot(rayDir, Spheres.sphereData[0].transformation.translation);
-    float c = dot(Spheres.sphereData[0].transformation.translation, Spheres.sphereData[0].transformation.translation) - Spheres.sphereData[0].radius * Spheres.sphereData[0].radius;
-    float discriminant = pow(-2*dot(rayDir, Spheres.sphereData[0].transformation.translation), 2)-4*dot(rayDir, rayDir)*(dot(Spheres.sphereData[0].transformation.translation, Spheres.sphereData[0].transformation.translation)-pow(Spheres.sphereData[0].radius, 2));
+    vec3 spherePos = ArrToVec3(Spheres[0].transformation.translation);
+    float b = -2*dot(rayDir, spherePos);
+    float c = dot(spherePos, spherePos) - Spheres[0].radius * Spheres[0].radius;
+    float discriminant = pow(-2*dot(rayDir, spherePos), 2)-4*dot(rayDir, rayDir)*(dot(spherePos, spherePos)-pow(Spheres[0].radius, 2));
     if(discriminant < 0) {
         return;
     }
-    float intersectionDistance = (-b+sqrt(b*b-4*a*c))/(2*a);
-    float secondDistance = (-b-sqrt(b*b-4*a*c))/(2*a);
-    if(secondDistance < intersectionDistance) {
-        intersectionDistance = secondDistance;
-    }
-    imageStore(renderScreen, ivec2(gl_GlobalInvocationID.xy), Materials.materialData[Spheres.sphereData[0].materialIndex].color);
+    imageStore(renderScreen, ivec2(gl_GlobalInvocationID), Materials[Spheres[0].materialIndex].color);
+    // float intersectionDistance = (-b+sqrt(b*b-4*a*c))/(2*a);
+    // float secondDistance = (-b-sqrt(b*b-4*a*c))/(2*a);
+    // if(secondDistance < intersectionDistance) {
+    //     intersectionDistance = secondDistance;
+    // }
 }
