@@ -17,11 +17,15 @@ typedef struct {
 	size_t length, count;
 	size_t byteSize;
 	void *arr;
-} EngineQueue;
+} EngineHeapArray;
+
+#define ENGINE_HEAPARR(heapArr, type) ((type*)heapArr.arr)
+#define ENGINE_HEAPARR_DEFAULT ((EngineHeapArray){.arr = NULL, .byteSize = 0, .length = 0, .count = 0})
 
 
-void EngineCreateQueue(EngineQueue *queue);
-void EngineDestroyQueue(EngineQueue *queue);
-void EngineQueueAdd(EngineQueue *queue, void *in);
-void EngineQueueRetreive(EngineQueue *queue, void *out);
-void EngineQueuePeek(EngineQueue *queue, void *out);
+void EngineCreateHeapArray(EngineHeapArray *heapArr);
+void EngineDestroyHeapArray(EngineHeapArray *heapArr);
+void EngineHeapArrayEnqueue(EngineHeapArray *heapArr, void *in);
+void EngineHeapArrayDequeue(EngineHeapArray *heapArr, void *out);
+#define EngineHeapArraypush(heapArr, in) EngineHeapArrayEnqueue(heapArr, in)
+void EngineHeapArrayPop(EngineHeapArray *heapArr, void *out);

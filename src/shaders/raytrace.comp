@@ -21,8 +21,11 @@ struct SphereBuffer {
     TransformationInput transformation;
     float radius;
     uint materialIndex;
-    bool isActive;
+    uint flags;
 };
+
+#define ENGINE_ISACTIVE 2
+#define ENGINE_EXISTS 1
 
 struct MaterialBuffer {
     float roughness;
@@ -46,8 +49,11 @@ layout(binding = 1) readonly buffer spheres {
 layout(binding = 2) readonly buffer transformations {
     TransformationInput Transformations[];
 };
+
+layout(constant_id = 3) const uint MATERIALCOUNT = 1;
+
 layout(binding = 3) uniform materials {
-    MaterialBuffer Materials[1];
+    MaterialBuffer Materials[MATERIALCOUNT];
 };
 // layout(binding = 5) uniform sampler2DArray textures;
 // layout(binding = 6) uniform sampler2DArray normals;
@@ -78,7 +84,7 @@ mat4 ViewportScreenspace = GenerateTransformationMatrix(Transformations[0]);
 mat4 ScreenspaceViewport = GenerateTransformationMatrix(Transformations[1]);
 
 vec4 convertToViewportCoordinates(ivec2 p) {
-    vec4 vec = vec4(p.xy, 1, 1);
+    vec4 vec = vec4(p.xy, 2, 1);
     vec4 result = ScreenspaceViewport * vec;
     return result;
 }
@@ -95,20 +101,54 @@ vec3 rayGenerate() {
     return direction;
 }
 
+
+#define OBJECT_NOTHING 0
+#define OBJECT_SPHERE 1
+#define OBJECT_LIGHT 2
+
+struct CastRayResult {
+    uint objectType;
+    uint hitIndex;
+};
+
+CastRayResult castRay(vec3 rayOrigin, vec3 direction) {
+    CastRayResult result = CastRayResult(
+        OBJECT_NOTHING, 0
+    );
+    float closestDistance = 100;
+    for(uint i = 0; i < Spheres.length(); i++) {
+        uint exists = Spheres[i].flags & ENGINE_EXISTS;
+        uint isActive = Spheres[i].flags & ENGINE_ISACTIVE;
+        if(exists == 0 || isActive == 0) {
+            continue;
+        }
+        vec3 spherePos = ArrToVec3(Spheres[i].transformation.translation);
+        float a = dot(direction, direction);
+        float b = -2*dot(direction, (spherePos-rayOrigin));
+        float c = dot(spherePos-rayOrigin, spherePos-rayOrigin)-pow(Spheres[i].radius, 2);
+        float discriminant = b*b-4*a*c;
+        if(discriminant < 0) {
+            continue;
+        }
+        float intersectionDistance = (-b+sqrt(discriminant))/(2*a);
+        float secondDistance = (-b-sqrt(discriminant))/(2*a);
+        if(secondDistance < intersectionDistance) {
+            intersectionDistance = secondDistance;
+        }
+        if(intersectionDistance < closestDistance || result.objectType == OBJECT_NOTHING) {
+            closestDistance = intersectionDistance;
+            result.hitIndex = i;
+            result.objectType = OBJECT_SPHERE;
+        }
+    }
+    return result;
+}
+
 void main() {
     vec3 rayDir = rayGenerate();
-    float a = dot(rayDir, rayDir);
-    vec3 spherePos = ArrToVec3(Spheres[0].transformation.translation);
-    float b = -2*dot(rayDir, spherePos);
-    float c = dot(spherePos, spherePos) - Spheres[0].radius * Spheres[0].radius;
-    float discriminant = pow(-2*dot(rayDir, spherePos), 2)-4*dot(rayDir, rayDir)*(dot(spherePos, spherePos)-pow(Spheres[0].radius, 2));
-    if(discriminant < 0) {
+    CastRayResult hitObj = castRay(vec3(0,0,-5), rayDir);
+    if(hitObj.objectType == OBJECT_NOTHING) {
         return;
     }
-    imageStore(renderScreen, ivec2(gl_GlobalInvocationID), Materials[Spheres[0].materialIndex].color);
-    // float intersectionDistance = (-b+sqrt(b*b-4*a*c))/(2*a);
-    // float secondDistance = (-b-sqrt(b*b-4*a*c))/(2*a);
-    // if(secondDistance < intersectionDistance) {
-    //     intersectionDistance = secondDistance;
-    // }
+    imageStore(renderScreen, ivec2(gl_GlobalInvocationID), Materials[Spheres[hitObj.hitIndex].materialIndex].color);
 }

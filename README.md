@@ -127,9 +127,10 @@ If `isTexturePresent` or `isNormalPresent` are `false`, then `textureIndex` and 
 buffer | Binding Index
 ------- | ---------------
 `renderScreen` | 0
-`TriangleBuffer` | 1
-`ElipsoidBuffer` | 2
-`TransformationBuffer` | 3
-`MaterialBuffer` | 4
+<!-- `TriangleBuffer` | 1 -->
+`SphereBuffer` | 1
+`TransformationBuffer` | 2
+`MaterialBuffer` | 3
+`LightSourceBuffer` | 4
 `TextureBuffer` | 5
 `NormalBuffer` | 6

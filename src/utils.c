@@ -2,29 +2,31 @@
 #include <stdlib.h>
 #include <string.h>
 
-void EngineCreateQueue(EngineQueue *queue) {
-    queue->arr = malloc(queue->length * queue->byteSize);
-    queue->count = 0;
+void EngineCreateHeapArray(EngineHeapArray *heapArr) {
+    heapArr->arr = malloc(heapArr->length * heapArr->byteSize);
+    heapArr->count = 0;
 }
 
-void EngineDestroyQueue(EngineQueue *queue) {
-    free(queue->arr);
+void EngineDestroyHeapArray(EngineHeapArray *heapArr) {
+    free(heapArr->arr);
 }
-void EngineQueueAdd(EngineQueue *queue, void *in) {
-    if(queue->length == queue->count) {
-        queue->length *= 2;
-        queue->arr = realloc(queue->arr, queue->length * queue->byteSize);
+void EngineHeapArrayEnqueue(EngineHeapArray *heapArr, void *in) {
+    if(heapArr->length == heapArr->count) {
+        heapArr->length *= 2;
+        heapArr->arr = realloc(heapArr->arr, heapArr->length * heapArr->byteSize);
     }
-    memcpy((char*)queue->arr + queue->count * queue->byteSize, in, queue->byteSize);
-    queue->count++;
+    memcpy((char*)heapArr->arr + heapArr->count * heapArr->byteSize, in, heapArr->byteSize);
+    heapArr->count++;
 }
-void EngineQueueRetreive(EngineQueue *queue, void *out) {
-    memcpy(out, queue->arr, queue->byteSize);
-    for(size_t i = 1; i < queue->count; i++) {
-        memcpy((char*)queue->arr + (i-1)*queue->byteSize, (char*)queue->arr + i*queue->byteSize, queue->byteSize); 
+void EngineHeapArrayDequeue(EngineHeapArray *heapArr, void *out) {
+    memcpy(out, heapArr->arr, heapArr->byteSize);
+    for(size_t i = 1; i < heapArr->count; i++) {
+        memcpy((char*)heapArr->arr + (i-1)*heapArr->byteSize, (char*)heapArr->arr + i*heapArr->byteSize, heapArr->byteSize); 
     }
-    queue->count--;
+    heapArr->count--;
 }
-void EngineQueuePeek(EngineQueue *queue, void *out) {
-    memcpy(out, queue->arr, queue->byteSize);
+
+void EngineHeapArrayPop(EngineHeapArray *heapArr, void *out) {
+    heapArr->count--;
+    memcpy(out,(char*)heapArr->arr + heapArr->count*heapArr->byteSize, sizeof(heapArr->byteSize)); 
 }

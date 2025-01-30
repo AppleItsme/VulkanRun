@@ -74,8 +74,6 @@ void sendValues() {
 		printf("|%.10f|\n", resultVec[i]);
 	}
 }
-
-
 void window_size_callback(GLFWwindow *window, int width, int height) {
 	glfwGetFramebufferSize(window, &bufferSize.width, &bufferSize.height);
 	if(bufferSize.width == 0 || bufferSize.height == 0) {
@@ -97,6 +95,9 @@ void window_size_callback(GLFWwindow *window, int width, int height) {
 	sendValues();
 }
 
+#define MAX_SPHERE_COUNT 3
+#define MAX_LIGHT_SOURCE 1
+
 int main() {
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -113,7 +114,13 @@ int main() {
 	uintptr_t surface = 0, vkInstance = 0;
 	EngineInit(&engine_instance, engineCreateInfo, &vkInstance);
 	glfwCreateWindowSurface(vkInstance, window, NULL, &surface);
-	EngineFinishSetup(engine_instance, surface);
+
+	const EngineObjectLimits limits = {
+		.maxSphereCount = MAX_SPHERE_COUNT,
+		.maxLightSourceCount = MAX_LIGHT_SOURCE
+	};
+
+	EngineFinishSetup(engine_instance, surface, limits);
 
 	EngineDataTypeInfo infos[ENGINE_DATATYPE_INFO_LENGTH] = {0};
 	EngineGenerateDataTypeInfo(infos);
@@ -126,26 +133,6 @@ int main() {
 	glfwGetFramebufferSize(window, &bufferSize.width, &bufferSize.height);
 	glfwSetWindowSizeCallback(window, window_size_callback);
 	EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height);
-
-	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/raytrace.spv", "rb");
-	if(shader == NULL) {
-		printf("womp womp bad path\n");
-		exit(-1);
-	}
-	fseek(shader, 0, SEEK_END);
-	size_t sz = ftell(shader);
-	fseek(shader, 0, SEEK_SET);
-	char *shaderCode = malloc(sizeof(char)*sz);
-	fread(shaderCode, sizeof(char), sz, shader);
-	fclose(shader);
-
-	EngineShaderInfo shaderInfo = {
-		.byteSize = sz,
-		.code = shaderCode
-	};
-
-	res = EngineLoadShaders(engine_instance, &shaderInfo, 1);
-	free(shaderCode);
 
 	EngineSemaphore drawWaitSemaphore[2] = {0};
 	EngineSemaphore commandDoneSemaphore[2] = {0};
@@ -171,43 +158,98 @@ int main() {
 
 	glfwSetTime(0);
 
-	EngineMaterial material = {
-		.color = {1,0,1,1},
-		.isNormalPresent = false,
-		.isTexturePresent = false,
-		.luminosity = 0,
-		.roughness = 0,
-		.refraction = 0,
-	};
-	EngineLoadMaterials(engine_instance, &material, 1);
-	printf("materials loaded\n");
-
-	EngineSphere sphere = {
-		.isActive = true,
-		.materialID = material.ID,
-		.radius = 1,
-		.transformation = {
-			.translation = {0,0,2},
-			.rotation = {0,0,0},
-			.scale = {2,0,0}
+	EngineMaterial material[] = {
+		{
+			.color = {1,0,0,1},
+			.isNormalPresent = false,
+			.isTexturePresent = false,
+			.luminosity = 0,
+			.roughness = 0,
+			.refraction = 0,
+		},
+		{
+			.color = {0,1,0,1},
+			.isNormalPresent = false,
+			.isTexturePresent = false,
+			.luminosity = 0,
+			.roughness = 0,
+			.refraction = 0,
+		},
+		{
+			.color = {0,0,1,0},
+			.isNormalPresent = false,
+			.isTexturePresent = false,
+			.luminosity = 0,
+			.roughness = 0,
+			.refraction = 0,
 		}
 	};
-	EngineCreateSphere(engine_instance, &sphere, &sphere);
-	printf("sphere created\n");
+	EngineLoadMaterials(engine_instance, material, sizeof(material)/sizeof(material[0]));
+	printf("materials loaded\n");
 
-	// uint32_t i = 100;
+	EngineSphere data = {
+		.materialID = 0,
+		.radius = 1,
+		.transformation = {
+			.translation = {0,0,5},
+			.rotation = {0,0,0},
+			.scale = {0,0,0}
+		},
+		.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
+	};
+
+	EngineSphere *sphereArr[MAX_SPHERE_COUNT] = {0};
+	size_t sphereCount = 0;
+	size_t ID = 0;
+	EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
+	*sphereArr[0] = data;
+	EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
+	data.transformation.translation[0] = 1;
+	data.materialID = 1;
+	*sphereArr[1] = data;
+	res = EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
+	data.transformation.translation[1] = 1;
+	data.materialID = 2;
+	data.transformation.translation[0] = 0.5;
+	*sphereArr[2] = data;
+	EngineDestroySphere(engine_instance, sphereArr[0]);
+	EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
+	data.transformation.translation[0] = 0;
+	data.transformation.translation[1] = 0;
+	*sphereArr[0] = data;
+
+	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/raytrace.spv", "rb");
+	if(shader == NULL) {
+		printf("womp womp bad path\n");
+		exit(-1);
+	}
+	fseek(shader, 0, SEEK_END);
+	size_t sz = ftell(shader);
+	fseek(shader, 0, SEEK_SET);
+	char *shaderCode = malloc(sizeof(char)*sz);
+	fread(shaderCode, sizeof(char), sz, shader);
+	fclose(shader);
+
+	EngineShaderInfo shaderInfo = {
+		.byteSize = sz,
+		.code = shaderCode
+	};
+
+	res = EngineLoadShaders(engine_instance, &shaderInfo, 1);
+	free(shaderCode);
+	// uint32_t i = 3;
 	while(!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
 		if(isMinimised) {
 			continue;
 		}
-		EngineColor Color = {0, 0, 0, 1};
+		EngineColor Color = {0.5, 0.5, 0.5, 1};
 		res = EngineDrawStart(engine_instance, Color, &drawWaitSemaphore[EngineGetFrame(engine_instance)]);
 		// printf("drawing start\n");
 
 		float time = glfwGetTime();
-		vec4 arr = {0, 0, 3 + sinf(time), 1};
-		sphere.transformation.translation[3] = 2 + sinf(time);
+		sphereArr[0]->transformation.translation[1] = sinf(time);
+		sphereArr[2]->transformation.translation[0] = 0.5 + cosf(time);
 		
 		EngineCommand cmd = 0;
 		EngineCreateCommand(engine_instance, &cmd);
@@ -227,7 +269,7 @@ int main() {
 		// 	break;
 		// }
 	}
-	EngineDestroySphere(engine_instance, &sphere);
+	EngineDestroySphereBuffer(engine_instance);
 	// EngineDestroyCamera(engine_instance);
 	printf("destroyed sphere\n");
 	EngineUnloadMaterials(engine_instance);

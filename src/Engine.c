@@ -78,8 +78,10 @@ struct Engine {
 	VkDescriptorPool descriptorPool;
 	VkDescriptorSet descriptorSet[FRAME_OVERLAP];
 
-	EngineQueue writeQueue;
+	EngineHeapArray writeQueue;
 	EngineBuffer materialBuffer, sphereBuffer;
+
+	EngineObjectLimits limits;
 };
 
 uint32_t EngineGetFrame(Engine *engine) {
@@ -614,12 +616,11 @@ void updateDescriptorSets(Engine *engine) {
 		debug_msg("\t0x%zX\n", engine->descriptorSet[i]);
 	}
 	while(engine->writeQueue.count > 0) {
-		writeQueueElement cur = {0};
-		EngineQueuePeek(&engine->writeQueue, &cur);
+		writeQueueElement cur = ENGINE_HEAPARR(engine->writeQueue, writeQueueElement)[0];
 		if(cur.frame != engine->cur_frame) {
 			break;
 		}
-		EngineQueueRetreive(&engine->writeQueue, &cur);
+		EngineHeapArrayDequeue(&engine->writeQueue, &cur);
 		writeSets[writeSetCount] = cur.writeSet;
 		writeSets[writeSetCount].dstSet = engine->descriptorSet[engine->cur_frame];
 		debug_msg("index: %d\n\tbinding: %d\n\tset: 0x%zX\n\ttype: %d\n\tbufferAddress: 0x%zX\n\timageAddress: 0x%zX\n\tupdateLeft: %llu\n", 
@@ -640,7 +641,7 @@ void updateDescriptorSets(Engine *engine) {
 		writeSetCount++;
 		cur.updateLeft--;
 		cur.frame = NextFrame(engine->cur_frame);
-		EngineQueueAdd(&engine->writeQueue, &cur);
+		EngineHeapArrayEnqueue(&engine->writeQueue, &cur);
 	}
 	debug_msg("writeSetCount = %llu\n", writeSetCount);
 	vkUpdateDescriptorSets(engine->device, writeSetCount, writeSets, 0, NULL);
@@ -710,7 +711,7 @@ EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemap
 	vkBeginCommandBuffer(engine->backgroundBufferCmd[engine->cur_frame], &beginInfo);
 	
 	VkClearColorValue backgroundColor = {
-		.float32 = {background.r, background.g, background.b, background.a}
+		.float32 = {background[0], background[1], background[2], background[3]}
 	};
 	ChangeImageLayout(engine->backgroundBufferCmd[engine->cur_frame], 
 				engine->renderImages[engine->cur_frame].image, 
@@ -869,7 +870,10 @@ EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI, uintptr_t *
 	*vkInstance = engine->instance;
 	return ENGINE_RESULT_SUCCESS;
 };
-EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
+EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface, EngineObjectLimits limits) {
+
+	engine->limits = limits;
+
 	engine->surface = surface;
 	engine->physicalDevice = VK_NULL_HANDLE;
 	size_t physicalDeviceCount = 0;
@@ -1015,7 +1019,7 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 	engine->writeQueue.byteSize = sizeof(writeQueueElement);
 	engine->writeQueue.length = 10;
 
-	engine->sphereBuffer = (EngineBuffer){0};
+	engine->sphereBuffer.data = NULL;
 	engine->materialBuffer = (EngineBuffer){0};
 
 	//TODO
@@ -1023,7 +1027,7 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface) {
 	//if we let the USER control it then its easier on the engine to let them have their own variables
 	//on the other hand its less work for them if ENGINE controls it
 
-	EngineCreateQueue(&engine->writeQueue);
+	EngineCreateHeapArray(&engine->writeQueue);
 	debug_msg("Initialisation complete\n");
 	return ENGINE_RESULT_SUCCESS;
 }
@@ -1036,6 +1040,9 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 
 	engine->workgroupSize = ceil(sqrtl(engine->physicalDeviceProperties.limits.maxComputeWorkGroupInvocations));
 	debug_msg("workgroup size per axis: %lu\n", engine->workgroupSize);
+	uint32_t specialisationData[] = {
+		engine->workgroupSize, engine->materialBuffer.length
+	};
 	VkSpecializationMapEntry mapEntries[] = {
 		{
 			.constantID = 1,
@@ -1046,13 +1053,18 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 			.constantID = 2,
 			.offset = 0,
 			.size = sizeof(uint32_t)
+		},
+		{
+			.constantID = 3,
+			.offset = sizeof(uint32_t),
+			.size = sizeof(uint32_t)
 		}
 	};
 
 	VkSpecializationInfo specialInfo = {
-		.dataSize = sizeof(uint32_t),
-		.pData = &engine->workgroupSize,
-		.mapEntryCount = 2,
+		.dataSize = sizeof(specialisationData),
+		.pData = specialisationData,
+		.mapEntryCount = ARR_SIZE(mapEntries),
 		.pMapEntries = mapEntries
 	};
 	VkPipelineLayoutCreateInfo pipelineLayoutCI = {
@@ -1248,11 +1260,11 @@ void EngineAttachData(Engine *engine, EngineAttachDataInfo info) {
 		writeQueueElement cur = arr[engine->writeQueue.count-1];
 		if(NextFrame(writeElement.frame) == cur.frame && engine->cur_frame == writeElement.frame) {
 			arr[engine->writeQueue.count-1] = writeElement;
-			EngineQueueAdd(&engine->writeQueue, &cur);
+			EngineHeapArrayEnqueue(&engine->writeQueue, &cur);
 			return;
 		}
 	}
-	EngineQueueAdd(&engine->writeQueue, &writeElement);
+	EngineHeapArrayEnqueue(&engine->writeQueue, &writeElement);
 }
 
 EngineResult EngineCreateCommand(Engine *engine, EngineCommand *cmd) {
@@ -1398,7 +1410,7 @@ void EngineDestroyBuffer(Engine *engine, EngineBuffer buffer) {
 
 void EngineDestroy(Engine *engine) {
 	vkDeviceWaitIdle(engine->device);
-	EngineDestroyQueue(&engine->writeQueue);
+	EngineDestroyHeapArray(&engine->writeQueue);
 
 	if(engine->shaderModulesCount > 0) {
 		vkDestroyPipelineLayout(engine->device, engine->pipelineLayout, NULL);
@@ -1437,51 +1449,65 @@ void EngineDestroy(Engine *engine) {
 	free(engine);
 }
 
-/*
-typedef struct {
-    EngineTransformation transformation;
-    float radius;
-    uint32_t materialID;
-	bool isActive;
-    uint32_t ID;
-} EngineSphere;
-*/
+EngineResult EngineCreateSphere(Engine *engine, EngineSphere **sphereArr, size_t *count, size_t *indexOut) {
+	if(engine->sphereBuffer.data == NULL) {
+		debug_msg("creating sphere buffer\n");
+		engine->sphereBuffer = (EngineBuffer) {
+			.isAccessible = true,
+			.length = engine->limits.maxSphereCount,
+			.elementByteSize = sizeof(EngineSphere),
+			.count = 0
+		};
+		EngineCreateBuffer(engine, &engine->sphereBuffer, ENGINE_BUFFER_STORAGE);
 
-typedef struct {
-	EngineTransformation transformation;
-    float radius;
-    uint32_t materialID;
-	bool isActive;
-} GPUSphere;
-
-void EngineCreateSphere(Engine *engine, EngineSphere *sphereInfo, EngineSphere *sphereOut) {
-	engine->sphereBuffer = (EngineBuffer) {
-		.isAccessible = true,
-		.length = 1,
-		.elementByteSize = sizeof(GPUSphere)
-	};
-	EngineCreateBuffer(engine, &engine->sphereBuffer, ENGINE_BUFFER_STORAGE);
-	memcpy(engine->sphereBuffer.data, sphereInfo, sizeof(GPUSphere));
-	sphereOut = engine->sphereBuffer.data;
-	sphereOut->isActive = true;
-	sphereOut->ID = 0;
-
-	EngineAttachDataInfo attachInfo = {
-		.applyCount = ENGINE_ATTACH_DATA_ALL_FRAMES,
-		.binding = BINDING_SPHERE_BUFFER,
-		.content = {.buffer = engine->sphereBuffer},
-		.nextFrame = false,
-		.type = ENGINE_BUFFER_STORAGE,
-		.startingIndex = 0,
-		.endIndex = 0
-	};
-	EngineAttachData(engine, attachInfo);
+		EngineAttachDataInfo attachInfo = {
+			.applyCount = ENGINE_ATTACH_DATA_ALL_FRAMES,
+			.binding = BINDING_SPHERE_BUFFER,
+			.content = {.buffer = engine->sphereBuffer},
+			.nextFrame = false,
+			.type = ENGINE_BUFFER_STORAGE,
+			.startingIndex = 0,
+			.endIndex = 0,
+		};
+		EngineAttachData(engine, attachInfo);
+	}
+	debug_msg("sphere buffer created\n");
+	size_t index = engine->sphereBuffer.count;
+	if(index >= engine->limits.maxSphereCount) {
+		debug_msg("peak reached\n");
+		bool found = false;
+		for(size_t i = 0; i < engine->limits.maxSphereCount; i++) {
+			if(!(sphereArr[i]->flags & ENGINE_EXISTS_FLAG)) {
+				index = i;
+				found = true;
+				break;
+			}
+		}
+		if(!found) {
+			return (EngineResult) {.EngineCode = ENGINE_OUT_OF_MEMORY, .VulkanCode = 0};
+		}
+	}
+	debug_msg("if check passed\n");
+	EngineSphere *sphereData = engine->sphereBuffer.data;
+	sphereArr[index] = &sphereData[index];
+	debug_msg("sphere address assigned\n");
+	*indexOut = index;
+	if(index == engine->sphereBuffer.count)
+		engine->sphereBuffer.count += 1;
+	debug_msg("Sphere created\n\t===\n\tcount: %zu\n\tindex: %zu\n\t===\n", engine->sphereBuffer.count, *indexOut);
+	*count = engine->sphereBuffer.count;
+	return ENGINE_RESULT_SUCCESS;
 }
 
 void EngineDestroySphere(Engine *engine, EngineSphere *sphere) {
-	EngineDestroyBuffer(engine, engine->sphereBuffer);
-	sphere->isActive = false;
+	sphere->flags = 0;
+	sphere = NULL;
 }
+
+void EngineDestroySphereBuffer(Engine *engine) {
+	EngineDestroyBuffer(engine, engine->sphereBuffer);
+}
+
 
 EngineResult EngineLoadTextures(Engine *engine, size_t textureCount, char **texturePaths) {
 	// if(textureCount == 0)
@@ -1649,85 +1675,48 @@ void EngineUnloadTextures(Engine *engine) {
 	// vmaDestroyImage(engine->allocator, engine->textureImage.image, engine->textureImage.allocation);
 }
 
-typedef struct {
-	float roughness;
-    float refraction;
-    float luminosity;
-    EngineColor color;
-	bool isTexturePresent;
-    uint32_t textureIndex;
-    bool isNormalPresent;
-    uint32_t normalIndex;
-} GPUMaterial;
-
 void EngineLoadMaterials(Engine *engine, EngineMaterial *material, size_t materialCount) {
-	//TODO:
-	//specify materialCount as specialisation constant later
-	//for now it doesnt matter tho
 	engine->materialBuffer = (EngineBuffer){
 		.length = materialCount,
-		.elementByteSize = sizeof(GPUMaterial),
+		.elementByteSize = sizeof(EngineMaterial),
 		.isAccessible = false
 	};
 	EngineCreateBuffer(engine, &engine->materialBuffer, ENGINE_BUFFER_UNIFORM);
 	debug_msg("materialBuffer address: %llu\n", engine->materialBuffer._buffer);
-	for(size_t i = 0; i < materialCount; i++) {
-		material[i].ID = i;
-		debug_msg("material[%d].ID = %d\n", i, i);
-	}
+
 	debug_msg("Material buffer created\n");
-	EngineWriteMaterials(engine, material, materialCount);
+	EngineWriteMaterials(engine, material, NULL, materialCount);
 	debug_msg("materialBuffer address: %llu\n", engine->materialBuffer._buffer);
 	EngineAttachDataInfo attachInfo = {
 		.binding = BINDING_MATERIAL_BUFFER,
 		.content = {.buffer = engine->materialBuffer},
 		.startingIndex = 0,
 		.endIndex = 0,
-		.type = ENGINE_BUFFER_UNIFORM
+		.type = ENGINE_BUFFER_UNIFORM,
+		.applyCount = ENGINE_ATTACH_DATA_ALL_FRAMES,
+		.nextFrame = false
 	};
 	EngineAttachData(engine, attachInfo);
 	debug_msg("materials loaded\n");
 };
 
-void EngineWriteMaterials(Engine *engine, EngineMaterial *material, size_t materialCount) {
+void EngineWriteMaterials(Engine *engine, EngineMaterial *material, size_t *indices, size_t indexCount) {
 	EngineBufferAccessUpdate(engine, &engine->materialBuffer, true);
-	GPUMaterial *materialMem = engine->materialBuffer.data;
-	for(size_t i = 0; i < materialCount; i++) {
-		debug_msg("materialMem[material[%d].ID (= %d)]\n", i, material[i].ID);
-		materialMem[material[i].ID] = (GPUMaterial) {
-			.color = material[i].color,
-			.luminosity = material[i].luminosity,
-			.refraction = material[i].refraction,
-			.roughness = material[i].roughness,
-			.isNormalPresent = false,
-			.isTexturePresent = false
-		};
+	EngineMaterial *materialMem = engine->materialBuffer.data;
+	if(!indices) {
+		for(size_t i = 0; i < indexCount; i++) {
+			materialMem[i] = material[i];
+		}
+	} else {
+		for(size_t i = 0; i < indexCount; i++) {
+			materialMem[indices[i]] = material[i];
+		}
 	}
+
 	debug_msg("data copied\n");
 	EngineBufferAccessUpdate(engine, &engine->materialBuffer, false);
 }
 
 void EngineUnloadMaterials(Engine *engine) {
 	EngineDestroyBuffer(engine, engine->materialBuffer);
-}
-
-void EngineCreateCamera(Engine *engine, EngineCamera *camera) {
-	// engine->cameraBuffer = (EngineBuffer) {
-	// 	.length = 1,
-	// 	.elementByteSize = sizeof(EngineCamera),
-	// };
-	// EngineCreateBuffer(engine, &engine->cameraBuffer, ENGINE_BUFFER_STORAGE);
-	// EngineAttachDataInfo attachInfo = {
-	// 	.binding = BINDING_TRANSFORMATION_BUFFER,
-	// 	.content = {.buffer = engine->cameraBuffer._buffer},
-	// 	.startingIndex = 0,
-	// 	.endIndex = 0,
-	// 	.type = ENGINE_BUFFER_STORAGE
-	// };
-	// EngineAttachData(engine, attachInfo);
-	// vmaMapMemory(engine->allocator, engine->cameraBuffer._allocation, &camera);
-}
-void EngineDestroyCamera(Engine *engine) {
-	// vmaUnmapMemory(engine->allocator, engine->cameraBuffer._allocation);
-	// EngineDestroyBuffer(engine, engine->cameraBuffer);
 }

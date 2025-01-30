@@ -97,16 +97,19 @@ typedef enum {
     ENGINE_COMMAND_ONE_TIME
 } EngineCommandRecordingType;
 
-typedef struct {
-    float r;
-    float g;
-    float b;
-    float a;
-} EngineColor;
+typedef vec4 EngineColor;
 
 #define MAKE_VERSION(major, minor, patch) ((((uint32_t)(major)) << 22U) | (((uint32_t)(minor)) << 12U) | ((uint32_t)(patch)))
+
+typedef struct {
+    size_t maxSphereCount;
+    size_t maxLightSourceCount;
+    size_t maxTriangleCount;
+} EngineObjectLimits;
+
+
 EngineResult EngineInit(Engine **engine, EngineCI engineCI, uintptr_t *vkInstance);
-EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface);
+EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface, EngineObjectLimits limits);
 void EngineDestroy(Engine *engine);
 
 EngineResult EngineSwapchainCreate(Engine *engine, uint32_t frameBufferWidth, uint32_t frameBufferHeight);
@@ -163,7 +166,6 @@ typedef struct {
     uint32_t textureIndex;
     bool isNormalPresent;
     uint32_t normalIndex;
-    uint32_t ID;
 } EngineMaterial;
 
 typedef struct {
@@ -172,23 +174,29 @@ typedef struct {
     vec3 rotation;
 } EngineTransformation;
 
+typedef enum {
+    ENGINE_EXISTS_FLAG = 1,
+    ENGINE_ISACTIVE_FLAG = 2,
+} EngineSphereDataFlags;
+
 typedef struct {
-    EngineTransformation transformation;
+	EngineTransformation transformation;
     float radius;
     uint32_t materialID;
-    bool isActive;
-    uint32_t ID;
+	uint32_t flags;
 } EngineSphere;
 
-void EngineCreateSphere(Engine *engine, EngineSphere *sphereInfo, EngineSphere *sphereOut);
-void EngineUpdateSphere(Engine *engine, EngineSphere *sphere);
-void EngineDestroySphere(Engine *engine, EngineSphere *sphere);
+EngineResult EngineCreateSphere(Engine *engine, EngineSphere **sphereArr, size_t *count, size_t *ID);
+void EngineDestroySphere(Engine *engine, EngineSphere *sphereInstance);
+void EngineDestroySphereBuffer(Engine *engine);
 
 void EngineLoadMaterials(Engine *engine, EngineMaterial *material, size_t materialCount);
-void EngineWriteMaterials(Engine *engine, EngineMaterial *material, size_t materialCount);
+
+//if indices == NULL, then it starts from 0 and goes to count-1
+void EngineWriteMaterials(Engine *engine, EngineMaterial *material, size_t *indices, size_t count);
 void EngineUnloadMaterials(Engine *engine);
 
-typedef EngineTransformation EngineCamera;
 
-void EngineCreateCamera(Engine *engine, EngineCamera *camera);
-void EngineDestroyCamera(Engine *engine);
+// EngineResult EngineCreateLightSource(Engine *engine, EngineLightSource *lightSourceArr, size_t *count, size_t *ID);
+// void EngineDestroyLightSource(Engine *engine, EngineLightSource *lightSourceArr, size_t ID);
+// void EngineDestroyLightSourceBuffer(Engine *engine);
