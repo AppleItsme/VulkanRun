@@ -44,8 +44,8 @@ void sendValues() {
 		.rotation = {0,0,0}
 	}, {
 		.translation = {-(float)bufferSize.width/(float)bufferSize.height, 1, 0},
+		.scale = {2/(float)bufferSize.height, -2/(float)bufferSize.height, 1},
 		.rotation = {0,0,0},
-		.scale = {2/(float)bufferSize.height, -2/(float)bufferSize.height, 1}
 	}};
 	memcpy(VSMatrices.data, matrices, sizeof(EngineTransformation)*2);
 	
@@ -95,8 +95,11 @@ void window_size_callback(GLFWwindow *window, int width, int height) {
 	sendValues();
 }
 
-#define MAX_SPHERE_COUNT 3
+#define MAX_SPHERE_COUNT 4
 #define MAX_LIGHT_SOURCE 1
+
+#define ARR_SIZE(arr) (sizeof(arr)/sizeof(arr[0]))
+
 
 int main() {
 	glfwInit();
@@ -184,14 +187,14 @@ int main() {
 			.refraction = 0,
 		}
 	};
-	EngineLoadMaterials(engine_instance, material, sizeof(material)/sizeof(material[0]));
+	EngineLoadMaterials(engine_instance, material, ARR_SIZE(material));
 	printf("materials loaded\n");
 
 	EngineSphere data = {
 		.materialID = 0,
-		.radius = 1,
+		.radius = 0.5,
 		.transformation = {
-			.translation = {0,0,5},
+			.translation = {1,2,5},
 			.rotation = {0,0,0},
 			.scale = {0,0,0}
 		},
@@ -205,18 +208,24 @@ int main() {
 	*sphereArr[0] = data;
 	EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
 	data.transformation.translation[0] = 1;
+	data.transformation.translation[1] = -2;
 	data.materialID = 1;
 	*sphereArr[1] = data;
-	res = EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
-	data.transformation.translation[1] = 1;
-	data.materialID = 2;
-	data.transformation.translation[0] = 0.5;
-	*sphereArr[2] = data;
-	EngineDestroySphere(engine_instance, sphereArr[0]);
 	EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
-	data.transformation.translation[0] = 0;
 	data.transformation.translation[1] = 0;
-	*sphereArr[0] = data;
+	data.transformation.translation[0] = -1;
+	data.materialID = 2;
+	*sphereArr[2] = data;
+
+	EngineLightSource lightSources[] = {
+		{
+			.color = {1,1,1,1},
+			.lightData = {-2,0,5,1},
+			.type = 0
+		},
+	};
+
+	EngineLoadLightSources(engine_instance, lightSources, ARR_SIZE(lightSources));
 
 	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/raytrace.spv", "rb");
 	if(shader == NULL) {
@@ -234,9 +243,11 @@ int main() {
 		.byteSize = sz,
 		.code = shaderCode
 	};
+	bool beingPressed[2] = {0,0};
 
 	res = EngineLoadShaders(engine_instance, &shaderInfo, 1);
 	free(shaderCode);
+	int timeDivider = 1;
 	// uint32_t i = 3;
 	while(!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
@@ -247,10 +258,22 @@ int main() {
 		res = EngineDrawStart(engine_instance, Color, &drawWaitSemaphore[EngineGetFrame(engine_instance)]);
 		// printf("drawing start\n");
 
+		if(glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !beingPressed[0]) {
+			beingPressed[0] = true;
+			timeDivider++;
+		} else if(glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
+			beingPressed[0] = false;
+		}
+		if(glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !beingPressed[1]) {
+			beingPressed[1] = true;
+			if(timeDivider > 1)
+				timeDivider--;
+		} else if(glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
+			beingPressed[1] = false;
+		}
 		float time = glfwGetTime();
-		sphereArr[0]->transformation.translation[1] = sinf(time);
-		sphereArr[2]->transformation.translation[0] = 0.5 + cosf(time);
-		
+		sphereArr[2]->transformation.translation[1] = sinf(time/timeDivider);
+
 		EngineCommand cmd = 0;
 		EngineCreateCommand(engine_instance, &cmd);
 		EngineCommandRecordingStart(engine_instance, cmd, ENGINE_COMMAND_ONE_TIME);
@@ -274,6 +297,8 @@ int main() {
 	printf("destroyed sphere\n");
 	EngineUnloadMaterials(engine_instance);
 	printf("destroyed materials\n");
+	EngineUnloadLightSources(engine_instance);
+	printf("destroyed light sources\n");
 	EngineDestroyBuffer(engine_instance, VSMatrices);
 	printf("destroyed matrices\n");
 	EngineSwapchainDestroy(engine_instance);

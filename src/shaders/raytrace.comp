@@ -38,6 +38,12 @@ struct MaterialBuffer {
     uint normalIndex;
 };
 
+struct LightSourceBuffer {
+    uint type;
+    vec4 lightData;
+    vec4 color;
+};
+
 //descriptor bindings for the pipeline
 layout(rgba16f, set = 0, binding = 0) uniform image2D renderScreen;
 // layout(binding = 2) readonly buffer triangles {
@@ -54,6 +60,12 @@ layout(constant_id = 3) const uint MATERIALCOUNT = 1;
 
 layout(binding = 3) uniform materials {
     MaterialBuffer Materials[MATERIALCOUNT];
+};
+
+layout(constant_id = 4) const uint LIGHTSOURCECOUNT = 1;
+
+layout(binding = 4) uniform lightsource {
+    LightSourceBuffer Lightsource[LIGHTSOURCECOUNT];
 };
 // layout(binding = 5) uniform sampler2DArray textures;
 // layout(binding = 6) uniform sampler2DArray normals;
@@ -109,14 +121,35 @@ vec3 rayGenerate() {
 struct CastRayResult {
     uint objectType;
     uint hitIndex;
+    float hitLength;
+    vec3 hitCoord;
 };
 
-CastRayResult castRay(vec3 rayOrigin, vec3 direction) {
+
+CastRayResult castRay(vec3 rayOrigin, vec3 direction, uint IGNORE_FLAGS) {
     CastRayResult result = CastRayResult(
-        OBJECT_NOTHING, 0
+        OBJECT_NOTHING, 0, 100, vec3(0,0,0)
     );
-    float closestDistance = 100;
-    for(uint i = 0; i < Spheres.length(); i++) {
+    uint lightIgnore = IGNORE_FLAGS & OBJECT_LIGHT;
+    for(uint i = 0; i < LIGHTSOURCECOUNT && lightIgnore == 0; i++) {
+        vec3 pos = Lightsource[i].lightData.xyz;
+        vec3 lightSourceDir = pos - rayOrigin;
+
+        float intersectionDistance = length(lightSourceDir);
+        if(intersectionDistance <= 0) {
+            continue;
+        }
+
+        if(intersectionDistance < result.hitLength) {
+            result.objectType = OBJECT_LIGHT;
+            result.hitIndex = i;
+            result.hitCoord = pos;
+            result.hitLength = intersectionDistance;
+        }
+    }
+
+    uint sphereIgnore = IGNORE_FLAGS & OBJECT_SPHERE;
+    for(uint i = 0; i < Spheres.length() && sphereIgnore == 0; i++) {
         uint exists = Spheres[i].flags & ENGINE_EXISTS;
         uint isActive = Spheres[i].flags & ENGINE_ISACTIVE;
         if(exists == 0 || isActive == 0) {
@@ -125,30 +158,89 @@ CastRayResult castRay(vec3 rayOrigin, vec3 direction) {
         vec3 spherePos = ArrToVec3(Spheres[i].transformation.translation);
         float a = dot(direction, direction);
         float b = -2*dot(direction, (spherePos-rayOrigin));
-        float c = dot(spherePos-rayOrigin, spherePos-rayOrigin)-pow(Spheres[i].radius, 2);
+        float c = dot(spherePos-rayOrigin, spherePos-rayOrigin)-Spheres[i].radius * Spheres[i].radius;
         float discriminant = b*b-4*a*c;
         if(discriminant < 0) {
             continue;
         }
-        float intersectionDistance = (-b+sqrt(discriminant))/(2*a);
-        float secondDistance = (-b-sqrt(discriminant))/(2*a);
-        if(secondDistance < intersectionDistance) {
+        float intersectionDistance = (-b-sqrt(discriminant))/(2*a);
+        float secondDistance = (-b+sqrt(discriminant))/(2*a);
+        if(secondDistance < intersectionDistance && secondDistance >= 0) {
             intersectionDistance = secondDistance;
         }
-        if(intersectionDistance < closestDistance || result.objectType == OBJECT_NOTHING) {
-            closestDistance = intersectionDistance;
+        if(intersectionDistance <= 0) {
+            continue;
+        }
+        if(intersectionDistance < result.hitLength) {
             result.hitIndex = i;
             result.objectType = OBJECT_SPHERE;
+            result.hitCoord = intersectionDistance * direction;
+            result.hitLength = intersectionDistance;
         }
     }
     return result;
 }
 
+const float minLuminosity = 0.01;
+
 void main() {
     vec3 rayDir = rayGenerate();
-    CastRayResult hitObj = castRay(vec3(0,0,-5), rayDir);
-    if(hitObj.objectType == OBJECT_NOTHING) {
+    CastRayResult hitObj = castRay(vec3(0,0,0), rayDir, OBJECT_LIGHT);
+    vec4 color = vec4(0,0,0,1);
+    if(hitObj.objectType == OBJECT_SPHERE) {
+        float luminosity = minLuminosity;
+        SphereBuffer curSphere = Spheres[hitObj.hitIndex];
+        color = Materials[curSphere.materialIndex].color * minLuminosity;
+        //now the ray bounces
+        vec3 sphereCentre = ArrToVec3(Spheres[hitObj.hitIndex].transformation.translation);
+        vec3 normal = normalize(hitObj.hitCoord - sphereCentre);
+    // vec3 newDirection = rayDir-2*dot(rayDir,normal)*normal; //REMEMBER THIS FOR LATER
+        for(uint i = 0; i < LIGHTSOURCECOUNT; i++) {
+            /*
+                1. Get a vector that goes from the current point to the light source
+                2. get its direction vector
+                3. see if anything is in between them
+                4. if there is, continue; otherwise, light it up
+            */
+            vec3 dir = normalize(Lightsource[i].lightData.xyz - hitObj.hitCoord);
+            CastRayResult curHit = castRay(hitObj.hitCoord, dir, OBJECT_NOTHING);
+            if(curHit.objectType == OBJECT_LIGHT) {
+                float luminosity = clamp(dot(normal, dir), 0, 1) * Lightsource[i].lightData.w/curHit.hitLength;
+                color = mix(Materials[curSphere.materialIndex].color, Lightsource[i].color, luminosity) * (max(luminosity, minLuminosity));
+            }
+        }
+    }
+    vec2 coords = convertToViewportCoordinates(ivec2(gl_GlobalInvocationID.xy)).xy;
+    float closestDistance = 100;
+    uint chosenLightSource = 0;
+    for(uint i = 0; i < LIGHTSOURCECOUNT; i++) {
+        vec3 spherePos = Lightsource[i].lightData.xyz;
+        float a = dot(rayDir, rayDir);
+        float b = -2*dot(rayDir, spherePos);
+        float c = dot(spherePos, spherePos)-0.25;
+        float discriminant = b*b-4*a*c;
+        if(discriminant < 0) {
+            continue;
+        }
+        float intersectionDistance = (-b-sqrt(discriminant))/(2*a);
+        float secondDistance = (-b+sqrt(discriminant))/(2*a);
+        if(secondDistance < intersectionDistance && secondDistance >= 0) {
+            intersectionDistance = secondDistance;
+        }
+        if(intersectionDistance <= 0) {
+            continue;
+        }
+        if(intersectionDistance < closestDistance) {
+            closestDistance = intersectionDistance;
+            chosenLightSource = i;
+        }
+    }
+    if(closestDistance == 100) {
+        if(hitObj.objectType == OBJECT_SPHERE) {
+            imageStore(renderScreen, ivec2(gl_GlobalInvocationID), color);
+        }
         return;
     }
-    imageStore(renderScreen, ivec2(gl_GlobalInvocationID), Materials[Spheres[hitObj.hitIndex].materialIndex].color);
+    color = Lightsource[chosenLightSource].color;
+    imageStore(renderScreen, ivec2(gl_GlobalInvocationID), color);
 }

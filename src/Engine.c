@@ -79,7 +79,7 @@ struct Engine {
 	VkDescriptorSet descriptorSet[FRAME_OVERLAP];
 
 	EngineHeapArray writeQueue;
-	EngineBuffer materialBuffer, sphereBuffer;
+	EngineBuffer materialBuffer, sphereBuffer, lightSourceBuffer;
 
 	EngineObjectLimits limits;
 };
@@ -1040,8 +1040,9 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 
 	engine->workgroupSize = ceil(sqrtl(engine->physicalDeviceProperties.limits.maxComputeWorkGroupInvocations));
 	debug_msg("workgroup size per axis: %lu\n", engine->workgroupSize);
+	debug_msg("Light source length: %zu\n", engine->lightSourceBuffer.length);
 	uint32_t specialisationData[] = {
-		engine->workgroupSize, engine->materialBuffer.length
+		engine->workgroupSize, engine->materialBuffer.length, engine->lightSourceBuffer.length
 	};
 	VkSpecializationMapEntry mapEntries[] = {
 		{
@@ -1057,6 +1058,11 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 		{
 			.constantID = 3,
 			.offset = sizeof(uint32_t),
+			.size = sizeof(uint32_t)
+		}, 
+		{
+			.constantID = 4,
+			.offset = 2 * sizeof(uint32_t),
 			.size = sizeof(uint32_t)
 		}
 	};
@@ -1113,20 +1119,15 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 #define BINDING_SPHERE_BUFFER 1
 #define BINDING_MATERIAL_BUFFER 3
 #define BINDING_TRANSFORMATION_BUFFER 2
+#define BINDING_LIGHTSOURCE_BUFFER 4
 
 
 inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo) {
 	dataTypeInfo[0] = ENGINE_DATATYPE(0, ENGINE_IMAGE);
-	//sphere buffer
 	dataTypeInfo[BINDING_SPHERE_BUFFER] = ENGINE_DATATYPE(BINDING_SPHERE_BUFFER, ENGINE_BUFFER_STORAGE);
-	// dataTypeInfo[2] = ENGINE_DATATYPE(2, ENGINE_BUFFER_STORAGE);
 	dataTypeInfo[BINDING_TRANSFORMATION_BUFFER] = ENGINE_DATATYPE(BINDING_TRANSFORMATION_BUFFER, ENGINE_BUFFER_STORAGE);
-	//transformation buffer
-	// dataTypeInfo[BINDING_TRANSFORMATION_BUFFER] = ENGINE_DATATYPE(BINDING_TRANSFORMATION_BUFFER, ENGINE_BUFFER_STORAGE);
-	//material buffer
 	dataTypeInfo[BINDING_MATERIAL_BUFFER] = ENGINE_DATATYPE(BINDING_MATERIAL_BUFFER, ENGINE_BUFFER_UNIFORM);
-	// dataTypeInfo[5] = ENGINE_DATATYPE(5, ENGINE_BUFFER_UNIFORM);
-	//TODO continue
+	dataTypeInfo[BINDING_LIGHTSOURCE_BUFFER] = ENGINE_DATATYPE(BINDING_LIGHTSOURCE_BUFFER, ENGINE_BUFFER_UNIFORM);
 }
 
 
@@ -1381,7 +1382,7 @@ EngineResult EngineCreateBuffer(Engine *engine, EngineBuffer *buffer, EngineData
 
 	VmaAllocationCreateInfo allocCI = {
 		.usage = VMA_MEMORY_USAGE_AUTO,
-		.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+		.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
 	};
 	res = vmaCreateBuffer(engine->allocator, &buffCI, &allocCI, &buffer->_buffer, &buffer->_allocation, NULL);
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_BUFFER_CREATION_FAILED, res);
@@ -1669,7 +1670,6 @@ EngineResult EngineLoadTextures(Engine *engine, size_t textureCount, char **text
 	// debug_msg("Textures were loaded successfully\n");
 	// return ENGINE_RESULT_SUCCESS;
 };
-
 void EngineUnloadTextures(Engine *engine) {
 	// vkDestroySampler(engine->device, engine->sampler, NULL);
 	// vmaDestroyImage(engine->allocator, engine->textureImage.image, engine->textureImage.allocation);
@@ -1699,7 +1699,6 @@ void EngineLoadMaterials(Engine *engine, EngineMaterial *material, size_t materi
 	EngineAttachData(engine, attachInfo);
 	debug_msg("materials loaded\n");
 };
-
 void EngineWriteMaterials(Engine *engine, EngineMaterial *material, size_t *indices, size_t indexCount) {
 	EngineBufferAccessUpdate(engine, &engine->materialBuffer, true);
 	EngineMaterial *materialMem = engine->materialBuffer.data;
@@ -1716,7 +1715,57 @@ void EngineWriteMaterials(Engine *engine, EngineMaterial *material, size_t *indi
 	debug_msg("data copied\n");
 	EngineBufferAccessUpdate(engine, &engine->materialBuffer, false);
 }
-
 void EngineUnloadMaterials(Engine *engine) {
 	EngineDestroyBuffer(engine, engine->materialBuffer);
+}
+
+// typedef struct {
+//     uint32_t type;
+//     vec4 lightData;
+//     vec4 color;
+// } EngineLightSource;
+
+void EngineLoadLightSources(Engine *engine, EngineLightSource *lightSources, size_t lightSourceCount) {
+	engine->lightSourceBuffer = (EngineBuffer){
+		.length = lightSourceCount,
+		.elementByteSize = sizeof(EngineLightSource),
+		.isAccessible = false
+	};
+	EngineCreateBuffer(engine, &engine->lightSourceBuffer, ENGINE_BUFFER_UNIFORM);
+	debug_msg("lightSourceBuffer address: %llu\n", engine->lightSourceBuffer._buffer);
+
+	debug_msg("Light source buffer created\n");
+	EngineWriteLightSources(engine, lightSources, NULL, lightSourceCount);
+	debug_msg("LightSourceBuffer address: %llu\n", engine->lightSourceBuffer._buffer);
+	EngineAttachDataInfo attachInfo = {
+		.binding = BINDING_LIGHTSOURCE_BUFFER,
+		.content = {.buffer = engine->lightSourceBuffer},
+		.startingIndex = 0,
+		.endIndex = 0,
+		.type = ENGINE_BUFFER_UNIFORM,
+		.applyCount = ENGINE_ATTACH_DATA_ALL_FRAMES,
+		.nextFrame = false
+	};
+	EngineAttachData(engine, attachInfo);
+	debug_msg("light sources loaded\n");
+}
+//if indices == NULL, then it starts from 0 and goes to count-1
+void EngineWriteLightSources(Engine *engine, EngineLightSource *lightSource, size_t *indices, size_t count) {
+	EngineBufferAccessUpdate(engine, &engine->lightSourceBuffer, true);
+	EngineLightSource *lightSourceMem = engine->lightSourceBuffer.data;
+	if(!indices) {
+		for(size_t i = 0; i < count; i++) {
+			lightSourceMem[i] = lightSource[i];
+		}
+	} else {
+		for(size_t i = 0; i < count; i++) {
+			lightSourceMem[indices[i]] = lightSource[i];
+		}
+	}
+
+	debug_msg("data copied\n");
+	EngineBufferAccessUpdate(engine, &engine->lightSourceBuffer, false);
+}
+void EngineUnloadLightSources(Engine *engine) {
+	EngineDestroyBuffer(engine, engine->lightSourceBuffer);
 }
