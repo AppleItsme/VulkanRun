@@ -95,7 +95,7 @@ void window_size_callback(GLFWwindow *window, int width, int height) {
 	sendValues();
 }
 
-#define MAX_SPHERE_COUNT 4
+#define MAX_SPHERE_COUNT 10
 #define MAX_LIGHT_SOURCE 1
 
 #define ARR_SIZE(arr) (sizeof(arr)/sizeof(arr[0]))
@@ -158,31 +158,28 @@ int main() {
 	EngineAttachData(engine_instance, matricesAttachInfo);
 
 	printf("matrices sent\n");
-
-	glfwSetTime(0);
-
 	EngineMaterial material[] = {
 		{
-			.color = {1,0,0,1},
+			.color = {1,0,0,0},
 			.isNormalPresent = false,
 			.isTexturePresent = false,
-			.luminosity = 0,
-			.roughness = 0,
+			.metallic = 0,
+			.roughness = 0.9,
 			.refraction = 0,
 		},
 		{
-			.color = {0,1,0,1},
+			.color = {0,1,0,0},
 			.isNormalPresent = false,
 			.isTexturePresent = false,
-			.luminosity = 0,
-			.roughness = 0,
+			.metallic = 0,
+			.roughness = 0.5,
 			.refraction = 0,
 		},
 		{
 			.color = {0,0,1,0},
 			.isNormalPresent = false,
 			.isTexturePresent = false,
-			.luminosity = 0,
+			.metallic = 0,
 			.roughness = 0,
 			.refraction = 0,
 		}
@@ -190,42 +187,65 @@ int main() {
 	EngineLoadMaterials(engine_instance, material, ARR_SIZE(material));
 	printf("materials loaded\n");
 
-	EngineSphere data = {
-		.materialID = 0,
-		.radius = 0.5,
-		.transformation = {
-			.translation = {1,2,5},
-			.rotation = {0,0,0},
-			.scale = {0,0,0}
+	EngineSphere sphereData[4] = {
+		{
+			.materialID = 0,
+			.radius = 0.5,
+			.transformation = {
+				.translation = {-1,-0.5,3},
+				.rotation = {0,0,0},
+				.scale = {0,0,0}
+			},
+			.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
 		},
-		.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
+		{
+			.materialID = 1,
+			.radius = 0.5,
+			.transformation = {
+				.translation = {0,-0.5,5},
+				.rotation = {0,0,0},
+				.scale = {0,0,0}
+			},
+			.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
+		},
+		{
+			.materialID = 2,
+			.radius = 0.75,
+			.transformation = {
+				.translation = {2,0.25,5},
+				.rotation = {0,0,0},
+				.scale = {0,0,0}
+			},
+			.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
+		},
+		{
+			.materialID = 2,
+			.radius = 0.75,
+			.transformation = {
+				.translation = {0,2,5},
+				.rotation = {0,0,0},
+				.scale = {0,0,0}
+			},
+			.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
+		}
 	};
 
 	EngineSphere *sphereArr[MAX_SPHERE_COUNT] = {0};
 	size_t sphereCount = 0;
 	size_t ID = 0;
 	EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
-	*sphereArr[0] = data;
+	*sphereArr[0] = sphereData[0];
 	EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
-	data.transformation.translation[0] = 1;
-	data.transformation.translation[1] = -2;
-	data.materialID = 1;
-	*sphereArr[1] = data;
+	*sphereArr[1] = sphereData[1];
 	EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
-	data.transformation.translation[1] = 0;
-	data.transformation.translation[0] = -1;
-	data.materialID = 2;
-	*sphereArr[2] = data;
-
-	EngineLightSource lightSources[] = {
-		{
+	*sphereArr[2] = sphereData[2];
+	EngineCreateSphere(engine_instance, sphereArr, &sphereCount, &ID);
+	*sphereArr[3] = sphereData[3];
+	EngineSunlight sunlight = {
 			.color = {1,1,1,1},
-			.lightData = {-2,0,5,1},
-			.type = 0
-		},
+			.lightData = {-1,-1,0,0.7},
 	};
-
-	EngineLoadLightSources(engine_instance, lightSources, ARR_SIZE(lightSources));
+	EngineLoadLightSources(engine_instance, sunlight);
 
 	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/raytrace.spv", "rb");
 	if(shader == NULL) {
@@ -243,12 +263,36 @@ int main() {
 		.byteSize = sz,
 		.code = shaderCode
 	};
-	bool beingPressed[2] = {0,0};
+
+	EngineBuffer randBuffer = {
+		.elementByteSize = sizeof(float),
+		.length = 2,
+		.isAccessible = true
+	};
+	EngineCreateBuffer(engine_instance, &randBuffer, ENGINE_BUFFER_UNIFORM);
+	EngineAttachDataInfo attachInfo = {
+		.applyCount = ENGINE_ATTACH_DATA_ALL_FRAMES,
+		.binding = 5,
+		.content = {.buffer = randBuffer},
+		.startingIndex = 0,
+		.endIndex = 0,
+		.nextFrame = false,
+		.type = ENGINE_BUFFER_UNIFORM
+	};
+	EngineAttachData(engine_instance, attachInfo);
 
 	res = EngineLoadShaders(engine_instance, &shaderInfo, 1);
 	free(shaderCode);
-	int timeDivider = 1;
-	// uint32_t i = 3;
+	bool beingPressed[2] = {0,0};
+	uint32_t maxRays = 20;
+
+	glfwSetTime(0);
+	float previousTime = 0;
+
+	// glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+
+	const float velocity = 1;
+	const float rotational_velocity = 0.1;
 	while(!glfwWindowShouldClose(window)) {
 		glfwPollEvents();
 		if(isMinimised) {
@@ -256,23 +300,49 @@ int main() {
 		}
 		EngineColor Color = {0.5, 0.5, 0.5, 1};
 		res = EngineDrawStart(engine_instance, Color, &drawWaitSemaphore[EngineGetFrame(engine_instance)]);
-		// printf("drawing start\n");
-
+		float time = glfwGetTime();
+		float deltaTime = time - previousTime;
+		previousTime = time;
 		if(glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !beingPressed[0]) {
 			beingPressed[0] = true;
-			timeDivider++;
+			if(maxRays < 20) {
+				maxRays++;
+				printf("maxRays: %zu\n", maxRays);
+			}
 		} else if(glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
 			beingPressed[0] = false;
 		}
 		if(glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !beingPressed[1]) {
 			beingPressed[1] = true;
-			if(timeDivider > 1)
-				timeDivider--;
+			if(maxRays > 1) {
+				maxRays--;
+				printf("maxRays: %zu\n", maxRays);
+			}
 		} else if(glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
 			beingPressed[1] = false;
 		}
-		float time = glfwGetTime();
-		sphereArr[2]->transformation.translation[1] = sinf(time/timeDivider);
+
+		float dx = (glfwGetKey(window, GLFW_KEY_D) - glfwGetKey(window, GLFW_KEY_A)) * velocity * deltaTime;
+		float dz = (glfwGetKey(window, GLFW_KEY_W) - glfwGetKey(window, GLFW_KEY_S)) * velocity * deltaTime;
+		float dy = (glfwGetKey(window, GLFW_KEY_SPACE) - glfwGetKey(window, GLFW_KEY_LEFT_SHIFT)) * velocity * deltaTime;
+
+
+		for(size_t i = 0; i < sphereCount; i++) {
+			sphereData[i].transformation.translation[0] += -dx;
+			sphereData[i].transformation.translation[2] += -dz;
+			sphereData[i].transformation.translation[1] += -dy;
+			
+			sphereArr[i]->transformation.translation[0] = sphereData[i].transformation.translation[0];
+			sphereArr[i]->transformation.translation[2] = sphereData[i].transformation.translation[2];
+			sphereArr[i]->transformation.translation[1] = sphereData[i].transformation.translation[1];
+		}
+
+		((float*)randBuffer.data)[0] = time;
+		((uint32_t*)randBuffer.data)[1] = maxRays;
+		// EngineSunlight curSunlight = sunlight;
+		// curSunlight.lightData[0] = sunlight.lightData[0] * cosf(time);
+		// curSunlight.lightData[1] = sunlight.lightData[1] * sinf(time);
+		// EngineWriteSunlight(engine_instance, curSunlight);
 
 		EngineCommand cmd = 0;
 		EngineCreateCommand(engine_instance, &cmd);
@@ -285,19 +355,15 @@ int main() {
 		EngineRunShader(engine_instance, cmd, 0, runInfo);
 		EngineCommandRecordingEnd(engine_instance, cmd);
 		EngineSubmitCommand(engine_instance, cmd, &drawWaitSemaphore[EngineGetFrame(engine_instance)], &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
-		// printf("custom command submitted\n");
 		EngineDrawEnd(engine_instance, &commandDoneSemaphore[EngineGetFrame(engine_instance)]);
-		// i--;
-		// if(i == 0) {
-		// 	break;
-		// }
 	}
+	EngineDestroyBuffer(engine_instance, randBuffer);
 	EngineDestroySphereBuffer(engine_instance);
 	// EngineDestroyCamera(engine_instance);
 	printf("destroyed sphere\n");
 	EngineUnloadMaterials(engine_instance);
 	printf("destroyed materials\n");
-	EngineUnloadLightSources(engine_instance);
+	EngineUnloadSunlight(engine_instance);
 	printf("destroyed light sources\n");
 	EngineDestroyBuffer(engine_instance, VSMatrices);
 	printf("destroyed matrices\n");

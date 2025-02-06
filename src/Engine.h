@@ -21,7 +21,7 @@ typedef enum {
 } EngineDataType;
 
 
-#define ENGINE_DATATYPE_INFO_LENGTH 5
+#define ENGINE_DATATYPE_INFO_LENGTH 6
 typedef struct {
     EngineDataType type;
     uint32_t bindingIndex, count;
@@ -160,7 +160,7 @@ void EngineDestroyImage(Engine *engine, EngineImage engineImage);
 typedef struct {
 	float roughness;
     float refraction;
-    float luminosity;
+    float metallic;
     EngineColor color;
 	bool isTexturePresent;
     uint32_t textureIndex;
@@ -196,12 +196,11 @@ void EngineWriteMaterials(Engine *engine, EngineMaterial *material, size_t *indi
 void EngineUnloadMaterials(Engine *engine);
 
 typedef struct {
-    uint32_t type;
     vec4 lightData;
     vec4 color;
-} EngineLightSource;
+} EngineSunlight;
 
-void EngineLoadLightSources(Engine *engine, EngineLightSource *lightSources, size_t lightSourceCount);
+void EngineLoadSunlight(Engine *engine, EngineSunlight sunlight);
 //if indices == NULL, then it starts from 0 and goes to count-1
-void EngineWriteLightSources(Engine *engine, EngineLightSource *lightSources, size_t *indices, size_t count);
-void EngineUnloadLightSources(Engine *engine);
+void EngineWriteSunlight(Engine *engine, EngineSunlight sunlight);
+void EngineUnloadSunlight(Engine *engine);

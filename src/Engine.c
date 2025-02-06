@@ -79,7 +79,7 @@ struct Engine {
 	VkDescriptorSet descriptorSet[FRAME_OVERLAP];
 
 	EngineHeapArray writeQueue;
-	EngineBuffer materialBuffer, sphereBuffer, lightSourceBuffer;
+	EngineBuffer materialBuffer, sphereBuffer, sunlightBuffer;
 
 	EngineObjectLimits limits;
 };
@@ -376,8 +376,7 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 			cur_deviceStats.point++;
 		}
 		debug_msg("\tDevice Passed with points: %d\n", cur_deviceStats.point);
-		debug_msg("\tMax workgroups for that device:\n\t\tmaxComputeWorkGroupSize: %llu\n\t\t\
-			maxComputeWorkGroupCount: %llu\n\t\tmaxComputeWorkGroupInvocations: %llu\n", 
+		debug_msg("\tMax workgroups for that device:\n\t\tmaxComputeWorkGroupSize: %llu\n\t\tmaxComputeWorkGroupCount: %llu\n\t\tmaxComputeWorkGroupInvocations: %llu\n", 
 			cur_deviceStats.props.limits.maxComputeWorkGroupSize,
 			cur_deviceStats.props.limits.maxComputeWorkGroupCount,
 			cur_deviceStats.props.limits.maxComputeWorkGroupInvocations
@@ -1040,9 +1039,9 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 
 	engine->workgroupSize = ceil(sqrtl(engine->physicalDeviceProperties.limits.maxComputeWorkGroupInvocations));
 	debug_msg("workgroup size per axis: %lu\n", engine->workgroupSize);
-	debug_msg("Light source length: %zu\n", engine->lightSourceBuffer.length);
+	debug_msg("Light source length: %zu\n", engine->sunlightBuffer.length);
 	uint32_t specialisationData[] = {
-		engine->workgroupSize, engine->materialBuffer.length, engine->lightSourceBuffer.length
+		engine->workgroupSize, engine->materialBuffer.length, engine->sunlightBuffer.length
 	};
 	VkSpecializationMapEntry mapEntries[] = {
 		{
@@ -1119,7 +1118,8 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 #define BINDING_SPHERE_BUFFER 1
 #define BINDING_MATERIAL_BUFFER 3
 #define BINDING_TRANSFORMATION_BUFFER 2
-#define BINDING_LIGHTSOURCE_BUFFER 4
+#define BINDING_SUNLIGHT_BUFFER 4
+#define BINDING_MISC_BUFFER 5
 
 
 inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo) {
@@ -1127,7 +1127,8 @@ inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo) {
 	dataTypeInfo[BINDING_SPHERE_BUFFER] = ENGINE_DATATYPE(BINDING_SPHERE_BUFFER, ENGINE_BUFFER_STORAGE);
 	dataTypeInfo[BINDING_TRANSFORMATION_BUFFER] = ENGINE_DATATYPE(BINDING_TRANSFORMATION_BUFFER, ENGINE_BUFFER_STORAGE);
 	dataTypeInfo[BINDING_MATERIAL_BUFFER] = ENGINE_DATATYPE(BINDING_MATERIAL_BUFFER, ENGINE_BUFFER_UNIFORM);
-	dataTypeInfo[BINDING_LIGHTSOURCE_BUFFER] = ENGINE_DATATYPE(BINDING_LIGHTSOURCE_BUFFER, ENGINE_BUFFER_UNIFORM);
+	dataTypeInfo[BINDING_SUNLIGHT_BUFFER] = ENGINE_DATATYPE(BINDING_SUNLIGHT_BUFFER, ENGINE_BUFFER_UNIFORM);
+	dataTypeInfo[BINDING_MISC_BUFFER] = ENGINE_DATATYPE(BINDING_MISC_BUFFER, ENGINE_BUFFER_UNIFORM);
 }
 
 
@@ -1725,21 +1726,18 @@ void EngineUnloadMaterials(Engine *engine) {
 //     vec4 color;
 // } EngineLightSource;
 
-void EngineLoadLightSources(Engine *engine, EngineLightSource *lightSources, size_t lightSourceCount) {
-	engine->lightSourceBuffer = (EngineBuffer){
-		.length = lightSourceCount,
-		.elementByteSize = sizeof(EngineLightSource),
+void EngineLoadLightSources(Engine *engine, EngineSunlight sunlight) {
+	engine->sunlightBuffer = (EngineBuffer){
+		.length = 1,
+		.elementByteSize = sizeof(EngineSunlight),
 		.isAccessible = false
 	};
-	EngineCreateBuffer(engine, &engine->lightSourceBuffer, ENGINE_BUFFER_UNIFORM);
-	debug_msg("lightSourceBuffer address: %llu\n", engine->lightSourceBuffer._buffer);
+	EngineCreateBuffer(engine, &engine->sunlightBuffer, ENGINE_BUFFER_UNIFORM);
 
-	debug_msg("Light source buffer created\n");
-	EngineWriteLightSources(engine, lightSources, NULL, lightSourceCount);
-	debug_msg("LightSourceBuffer address: %llu\n", engine->lightSourceBuffer._buffer);
+	EngineWriteSunlight(engine, sunlight);
 	EngineAttachDataInfo attachInfo = {
-		.binding = BINDING_LIGHTSOURCE_BUFFER,
-		.content = {.buffer = engine->lightSourceBuffer},
+		.binding = BINDING_SUNLIGHT_BUFFER,
+		.content = {.buffer = engine->sunlightBuffer},
 		.startingIndex = 0,
 		.endIndex = 0,
 		.type = ENGINE_BUFFER_UNIFORM,
@@ -1747,25 +1745,13 @@ void EngineLoadLightSources(Engine *engine, EngineLightSource *lightSources, siz
 		.nextFrame = false
 	};
 	EngineAttachData(engine, attachInfo);
-	debug_msg("light sources loaded\n");
 }
-//if indices == NULL, then it starts from 0 and goes to count-1
-void EngineWriteLightSources(Engine *engine, EngineLightSource *lightSource, size_t *indices, size_t count) {
-	EngineBufferAccessUpdate(engine, &engine->lightSourceBuffer, true);
-	EngineLightSource *lightSourceMem = engine->lightSourceBuffer.data;
-	if(!indices) {
-		for(size_t i = 0; i < count; i++) {
-			lightSourceMem[i] = lightSource[i];
-		}
-	} else {
-		for(size_t i = 0; i < count; i++) {
-			lightSourceMem[indices[i]] = lightSource[i];
-		}
-	}
-
-	debug_msg("data copied\n");
-	EngineBufferAccessUpdate(engine, &engine->lightSourceBuffer, false);
+void EngineWriteSunlight(Engine *engine, EngineSunlight sunlight) {
+	EngineBufferAccessUpdate(engine, &engine->sunlightBuffer, true);
+	EngineSunlight *mem = engine->sunlightBuffer.data;
+	*mem = sunlight;
+	EngineBufferAccessUpdate(engine, &engine->sunlightBuffer, false);
 }
-void EngineUnloadLightSources(Engine *engine) {
-	EngineDestroyBuffer(engine, engine->lightSourceBuffer);
+void EngineUnloadSunlight(Engine *engine) {
+	EngineDestroyBuffer(engine, engine->sunlightBuffer);
 }

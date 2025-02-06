@@ -30,7 +30,7 @@ struct SphereBuffer {
 struct MaterialBuffer {
     float roughness;
     float refraction;
-    float luminosity;
+    float metallic;
     vec4 color;
     bool isTexturePresent;
     uint textureIndex;
@@ -38,8 +38,7 @@ struct MaterialBuffer {
     uint normalIndex;
 };
 
-struct LightSourceBuffer {
-    uint type;
+struct Sunlight {
     vec4 lightData;
     vec4 color;
 };
@@ -62,11 +61,10 @@ layout(binding = 3) uniform materials {
     MaterialBuffer Materials[MATERIALCOUNT];
 };
 
-layout(constant_id = 4) const uint LIGHTSOURCECOUNT = 1;
-
-layout(binding = 4) uniform lightsource {
-    LightSourceBuffer Lightsource[LIGHTSOURCECOUNT];
+layout(binding = 4) uniform sun_u {
+    Sunlight sunlight;
 };
+
 // layout(binding = 5) uniform sampler2DArray textures;
 // layout(binding = 6) uniform sampler2DArray normals;
 
@@ -116,38 +114,30 @@ vec3 rayGenerate() {
 
 #define OBJECT_NOTHING 0
 #define OBJECT_SPHERE 1
-#define OBJECT_LIGHT 2
+#define OBJECT_PLANE 2
+#define CASTRAY_MAX_LENGTH 20
+
 
 struct CastRayResult {
     uint objectType;
     uint hitIndex;
-    float hitLength;
-    vec3 hitCoord;
+    highp float hitLength;
+    highp vec3 hitCoord;
 };
 
+vec3 planeNormal[2] = vec3[](
+    normalize(vec3(0,1,0)), normalize(vec3(1,0,-1))
+);
+vec3 planeOrigin[2] = vec3[](
+    vec3(0,-1,0), vec3(0,0,7)
+);
+
+const float minIntersection = 0.001;
 
 CastRayResult castRay(vec3 rayOrigin, vec3 direction, uint IGNORE_FLAGS) {
     CastRayResult result = CastRayResult(
-        OBJECT_NOTHING, 0, 100, vec3(0,0,0)
+        OBJECT_NOTHING, 0, 20, vec3(0,0,0)
     );
-    uint lightIgnore = IGNORE_FLAGS & OBJECT_LIGHT;
-    for(uint i = 0; i < LIGHTSOURCECOUNT && lightIgnore == 0; i++) {
-        vec3 pos = Lightsource[i].lightData.xyz;
-        vec3 lightSourceDir = pos - rayOrigin;
-
-        float intersectionDistance = length(lightSourceDir);
-        if(intersectionDistance <= 0) {
-            continue;
-        }
-
-        if(intersectionDistance < result.hitLength) {
-            result.objectType = OBJECT_LIGHT;
-            result.hitIndex = i;
-            result.hitCoord = pos;
-            result.hitLength = intersectionDistance;
-        }
-    }
-
     uint sphereIgnore = IGNORE_FLAGS & OBJECT_SPHERE;
     for(uint i = 0; i < Spheres.length() && sphereIgnore == 0; i++) {
         uint exists = Spheres[i].flags & ENGINE_EXISTS;
@@ -156,91 +146,166 @@ CastRayResult castRay(vec3 rayOrigin, vec3 direction, uint IGNORE_FLAGS) {
             continue;
         }
         vec3 spherePos = ArrToVec3(Spheres[i].transformation.translation);
-        float a = dot(direction, direction);
-        float b = -2*dot(direction, (spherePos-rayOrigin));
+        float a = 1;
+        float b = 2*dot(direction, rayOrigin-spherePos);
         float c = dot(spherePos-rayOrigin, spherePos-rayOrigin)-Spheres[i].radius * Spheres[i].radius;
         float discriminant = b*b-4*a*c;
-        if(discriminant < 0) {
+        if(discriminant <= 0) {
             continue;
         }
         float intersectionDistance = (-b-sqrt(discriminant))/(2*a);
         float secondDistance = (-b+sqrt(discriminant))/(2*a);
-        if(secondDistance < intersectionDistance && secondDistance >= 0) {
+        if(secondDistance < intersectionDistance && secondDistance > minIntersection) {
             intersectionDistance = secondDistance;
         }
-        if(intersectionDistance <= 0) {
+        if(intersectionDistance <= minIntersection) {
             continue;
         }
         if(intersectionDistance < result.hitLength) {
-            result.hitIndex = i;
-            result.objectType = OBJECT_SPHERE;
-            result.hitCoord = intersectionDistance * direction;
             result.hitLength = intersectionDistance;
+            result.objectType = OBJECT_SPHERE;
+            result.hitIndex = i;
+            result.hitCoord = rayOrigin + intersectionDistance * direction;
         }
     }
+
+    //TEMPORARY
+    for(uint i = 0; i < 2; i++) {
+        float nd = dot(planeNormal[i], direction);
+        if(nd >= 0) {
+            continue;
+        }
+        float intersectionDistance = dot(planeNormal[i], planeOrigin[i] - rayOrigin)/nd;
+        if(intersectionDistance < result.hitLength) {
+            result.hitCoord = rayOrigin + direction * intersectionDistance;
+            result.hitLength = intersectionDistance;
+            result.objectType = OBJECT_PLANE;
+            result.hitIndex = i;
+        }
+    }
+
     return result;
 }
 
-const float minLuminosity = 0.01;
+const float minLuminosity = 0.05;
+
+float rand(vec2 co, float seed){
+  return fract(sin(dot(co * seed, vec2(12.9898,78.233))) * 43758.5453);
+}
+
+layout(binding = 5) uniform misc {
+    float initialSeed;
+    uint maxRays;
+};
+
+MaterialBuffer getMaterial(CastRayResult hitObj) {
+    MaterialBuffer material;
+    switch(hitObj.objectType) {
+        case OBJECT_PLANE:
+            if(hitObj.hitIndex == 0) {
+                material.color = vec4(1,1,0,1);
+                material.metallic = 0;
+                material.roughness = 0.8;
+                material.refraction = 0;
+            } else {
+                material.color = vec4(1,0,0.75,1);
+                material.metallic = 0;
+                material.roughness = 0.7;
+                material.refraction = 0;
+            }
+
+            break;
+        case OBJECT_SPHERE:
+            material = Materials[Spheres[hitObj.hitIndex].materialIndex]; 
+            break;
+        case OBJECT_NOTHING:
+            break;
+    }
+    return material;
+}
+
+vec3 getNormal(CastRayResult hitObj) {
+    vec3 normal;
+    switch(hitObj.objectType) {
+        case OBJECT_PLANE:
+            normal = planeNormal[hitObj.hitIndex];
+            break;
+        case OBJECT_SPHERE:
+            vec3 spherePos = ArrToVec3(Spheres[hitObj.hitIndex].transformation.translation);
+            normal = normalize(hitObj.hitCoord - spherePos);
+            break;
+        case OBJECT_NOTHING:
+            return vec3(0,0,0);
+    }
+    return normal;
+}
+
+const vec3 lightData = vec3(1,1,1);
+
+vec4 calculateColor(uint rayDepth, CastRayResult hitObj) {
+    if(hitObj.objectType == OBJECT_NOTHING) {
+        return vec4(-1,-1,-1,-1);
+    }
+    MaterialBuffer material = getMaterial(hitObj);
+    vec3 normal = getNormal(hitObj);
+    vec4 color = material.color * minLuminosity;
+    CastRayResult shadowRay = castRay(hitObj.hitCoord + vec3(1,1,1) * minIntersection, -normalize(sunlight.lightData.xyz), OBJECT_NOTHING);
+    if(shadowRay.objectType == OBJECT_NOTHING) {
+        float luminosity = clamp(-dot(normal, sunlight.lightData.xyz),0,1) * sunlight.lightData.w;
+        vec4 diffuseComponent = material.color * normalize(sunlight.color) * luminosity; 
+        color += diffuseComponent;// * material.roughness
+    }
+    return color;
+}
+
+const uint MAX_RAYS_SIZE = 20;
 
 void main() {
-    vec3 rayDir = rayGenerate();
-    CastRayResult hitObj = castRay(vec3(0,0,0), rayDir, OBJECT_LIGHT);
-    vec4 color = vec4(0,0,0,1);
-    if(hitObj.objectType == OBJECT_SPHERE) {
-        float luminosity = minLuminosity;
-        SphereBuffer curSphere = Spheres[hitObj.hitIndex];
-        color = Materials[curSphere.materialIndex].color * minLuminosity;
-        //now the ray bounces
-        vec3 sphereCentre = ArrToVec3(Spheres[hitObj.hitIndex].transformation.translation);
-        vec3 normal = normalize(hitObj.hitCoord - sphereCentre);
-    // vec3 newDirection = rayDir-2*dot(rayDir,normal)*normal; //REMEMBER THIS FOR LATER
-        for(uint i = 0; i < LIGHTSOURCECOUNT; i++) {
-            /*
-                1. Get a vector that goes from the current point to the light source
-                2. get its direction vector
-                3. see if anything is in between them
-                4. if there is, continue; otherwise, light it up
-            */
-            vec3 dir = normalize(Lightsource[i].lightData.xyz - hitObj.hitCoord);
-            CastRayResult curHit = castRay(hitObj.hitCoord, dir, OBJECT_NOTHING);
-            if(curHit.objectType == OBJECT_LIGHT) {
-                float luminosity = clamp(dot(normal, dir), 0, 1) * Lightsource[i].lightData.w/curHit.hitLength;
-                color = mix(Materials[curSphere.materialIndex].color, Lightsource[i].color, luminosity) * (max(luminosity, minLuminosity));
-            }
+    uint rayCount = 0;
+    CastRayResult rayPath[MAX_RAYS_SIZE];
+    float weight[MAX_RAYS_SIZE];
+    weight[0] = 1;
+
+    highp vec3 rayOrigin = vec3(0,0,0);
+    highp vec3 rayDir = rayGenerate();
+    vec4 color = vec4(0.5,0.5,0.5,1);
+
+    float seed = initialSeed;    
+    for(;rayCount < maxRays; rayCount++) {
+        rayPath[rayCount] = castRay(rayOrigin, rayDir, OBJECT_NOTHING);
+        weight[rayCount] = 1; //later i will have absoprtion parameter for this
+        if(rayPath[rayCount].objectType == OBJECT_NOTHING) {
+            break;
         }
+        MaterialBuffer material = getMaterial(rayPath[rayCount]);
+        weight[rayCount] = 1-material.roughness; 
+        vec3 normal = getNormal(rayPath[rayCount]);
+        vec3 incomingDir = -rayDir;
+        vec3 differenceVector = normalize(normal - incomingDir);
+        vec3 perpVector = normalize(cross(normal, incomingDir));
+        seed = rand(rayPath[rayCount].hitCoord.xy, seed);
+        float randValue1 = dot(incomingDir, normal)*(2*seed-1);
+        seed = rand(rayPath[rayCount].hitCoord.xy, seed);
+        float randValue2 = dot(incomingDir, normal)*(2*seed-1);
+
+        vec3 roughDir = normalize(normal + (differenceVector * randValue1 + perpVector * randValue2));
+        vec3 perfectDir = reflect(rayDir, normal);
+
+        rayDir = mix(perfectDir, roughDir, material.roughness);
+        rayOrigin = rayPath[rayCount].hitCoord;
+        rayOrigin += vec3(1,1,1) * sign(dot(normal, incomingDir)) * minIntersection;
     }
-    vec2 coords = convertToViewportCoordinates(ivec2(gl_GlobalInvocationID.xy)).xy;
-    float closestDistance = 100;
-    uint chosenLightSource = 0;
-    for(uint i = 0; i < LIGHTSOURCECOUNT; i++) {
-        vec3 spherePos = Lightsource[i].lightData.xyz;
-        float a = dot(rayDir, rayDir);
-        float b = -2*dot(rayDir, spherePos);
-        float c = dot(spherePos, spherePos)-0.25;
-        float discriminant = b*b-4*a*c;
-        if(discriminant < 0) {
-            continue;
-        }
-        float intersectionDistance = (-b-sqrt(discriminant))/(2*a);
-        float secondDistance = (-b+sqrt(discriminant))/(2*a);
-        if(secondDistance < intersectionDistance && secondDistance >= 0) {
-            intersectionDistance = secondDistance;
-        }
-        if(intersectionDistance <= 0) {
-            continue;
-        }
-        if(intersectionDistance < closestDistance) {
-            closestDistance = intersectionDistance;
-            chosenLightSource = i;
-        }
-    }
-    if(closestDistance == 100) {
-        if(hitObj.objectType == OBJECT_SPHERE) {
-            imageStore(renderScreen, ivec2(gl_GlobalInvocationID), color);
-        }
+    if(rayCount == 0) {
         return;
     }
-    color = Lightsource[chosenLightSource].color;
+    rayCount = min(rayCount, maxRays-1);
+    while(rayCount < maxRays) {
+        color *= weight[rayCount];
+        if(rayPath[rayCount].objectType != OBJECT_NOTHING) {
+            vec4 curColor = calculateColor(rayCount, rayPath[rayCount]);
+            color = mix(curColor, color, weight[rayCount]);
+        }
+        rayCount--;
+    }
     imageStore(renderScreen, ivec2(gl_GlobalInvocationID), color);
 }
