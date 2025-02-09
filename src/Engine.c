@@ -79,7 +79,7 @@ struct Engine {
 	VkDescriptorSet descriptorSet[FRAME_OVERLAP];
 
 	EngineHeapArray writeQueue;
-	EngineBuffer materialBuffer, sphereBuffer, sunlightBuffer;
+	EngineBuffer materialBuffer, sphereBuffer, sunlightBuffer, cameraBuffer;
 
 	EngineObjectLimits limits;
 };
@@ -372,7 +372,7 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 		if(!goodFormat)
 			continue;
 		cur_deviceStats.point++; //make it strictly better than a 0 point
-		if(cur_deviceStats.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+		if(cur_deviceStats.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
 			cur_deviceStats.point++;
 		}
 		debug_msg("\tDevice Passed with points: %d\n", cur_deviceStats.point);
@@ -1020,6 +1020,7 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface, EngineObjectLi
 
 	engine->sphereBuffer.data = NULL;
 	engine->materialBuffer = (EngineBuffer){0};
+	engine->cameraBuffer = (EngineBuffer){0};
 
 	//TODO
 	//decide whether to let the user generate datatypes or we control it
@@ -1120,6 +1121,7 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 #define BINDING_TRANSFORMATION_BUFFER 2
 #define BINDING_SUNLIGHT_BUFFER 4
 #define BINDING_MISC_BUFFER 5
+#define BINDING_CAMERA_BUFFER 6
 
 
 inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo) {
@@ -1129,6 +1131,7 @@ inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo) {
 	dataTypeInfo[BINDING_MATERIAL_BUFFER] = ENGINE_DATATYPE(BINDING_MATERIAL_BUFFER, ENGINE_BUFFER_UNIFORM);
 	dataTypeInfo[BINDING_SUNLIGHT_BUFFER] = ENGINE_DATATYPE(BINDING_SUNLIGHT_BUFFER, ENGINE_BUFFER_UNIFORM);
 	dataTypeInfo[BINDING_MISC_BUFFER] = ENGINE_DATATYPE(BINDING_MISC_BUFFER, ENGINE_BUFFER_UNIFORM);
+	dataTypeInfo[BINDING_CAMERA_BUFFER] = ENGINE_DATATYPE(BINDING_CAMERA_BUFFER, ENGINE_BUFFER_STORAGE);
 }
 
 
@@ -1726,7 +1729,7 @@ void EngineUnloadMaterials(Engine *engine) {
 //     vec4 color;
 // } EngineLightSource;
 
-void EngineLoadLightSources(Engine *engine, EngineSunlight sunlight) {
+void EngineLoadSunlight(Engine *engine, EngineSunlight sunlight) {
 	engine->sunlightBuffer = (EngineBuffer){
 		.length = 1,
 		.elementByteSize = sizeof(EngineSunlight),
@@ -1754,4 +1757,32 @@ void EngineWriteSunlight(Engine *engine, EngineSunlight sunlight) {
 }
 void EngineUnloadSunlight(Engine *engine) {
 	EngineDestroyBuffer(engine, engine->sunlightBuffer);
+}
+
+// typedef struct {
+//     vec3 origin;
+//     vec3 direction;
+// } EngineCamera;
+
+void EngineCreateCamera(Engine *engine, EngineCamera **camera) {
+	engine->cameraBuffer = (EngineBuffer){
+		.length = 1,
+		.elementByteSize = sizeof(EngineCamera),
+		.isAccessible = true
+	};
+	EngineCreateBuffer(engine, &engine->cameraBuffer, ENGINE_BUFFER_STORAGE);
+	EngineAttachDataInfo attachInfo = {
+		.binding = BINDING_CAMERA_BUFFER,
+		.content = {.buffer = engine->cameraBuffer},
+		.startingIndex = 0,
+		.endIndex = 0,
+		.type = ENGINE_BUFFER_STORAGE,
+		.applyCount = ENGINE_ATTACH_DATA_ALL_FRAMES,
+		.nextFrame = false
+	};
+	EngineAttachData(engine, attachInfo);
+	*camera = engine->cameraBuffer.data;
+}
+void EngineDestroyCamera(Engine *engine) {
+	EngineDestroyBuffer(engine, engine->cameraBuffer);
 }

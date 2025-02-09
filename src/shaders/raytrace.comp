@@ -78,12 +78,12 @@ mat4 GenerateTransformationMatrix(TransformationInput t) {
     vec3 s = vec3(sin(t.rotation[0]), sin(t.rotation[1]), sin(t.rotation[2]));
     vec3 c = vec3(cos(t.rotation[0]), cos(t.rotation[1]), cos(t.rotation[2]));
     mat4 result = mat4(
-        t.scale[0]*c[1]*c[2], c[1]*s[2], s[1], 0,
-        -s[0]*s[1]*c[2]-c[0]*s[2], t.scale[1]*(c[0]*c[2]-s[0]*s[1]*s[2]), s[0]*c[1], 0,
-        s[0]*s[2]-c[0]*s[1]*c[2], -s[0]*c[2]-c[0]*s[1]*s[2], t.scale[2]*c[0]*c[1], 0,
-        t.translation[0], t.translation[1], t.translation[2],1
+        t.scale[0]*c.y*c.z, -s.x*s.y*c.z - c.x*s.y, s.x*s.z - c.x*s.y*c.z, t.translation[0],
+        c.y*s.x, t.scale[1]*(c.x*c.z - s.x*s.y*s.z), -s.x*c.z - c.x*s.y*s.z, t.translation[1],
+        s.y, s.x*c.y, t.scale[2]*c.x*c.y, t.translation[2],
+        0,0,0,1
     );
-    return result;
+    return transpose(result);
 }
 
 vec3 ArrToVec3(float arr[3]) {
@@ -105,13 +105,6 @@ ivec2 convertToScreenCoordinates(vec4 p) {
     );
 }
 
-vec3 rayGenerate() {
-    vec4 unnormalised_direction = convertToViewportCoordinates(ivec2(gl_GlobalInvocationID.xy));
-    vec3 direction = normalize(unnormalised_direction.xyz);
-    return direction;
-}
-
-
 #define OBJECT_NOTHING 0
 #define OBJECT_SPHERE 1
 #define OBJECT_PLANE 2
@@ -126,17 +119,18 @@ struct CastRayResult {
 };
 
 vec3 planeNormal[2] = vec3[](
-    normalize(vec3(0,1,0)), normalize(vec3(1,0,-1))
+    normalize(vec3(0,1,0)), normalize(vec3(0,0,-1))
 );
 vec3 planeOrigin[2] = vec3[](
     vec3(0,-1,0), vec3(0,0,7)
 );
 
-const float minIntersection = 0.001;
+const float minIntersection = 0.005;
+const float minOffset = minIntersection * 2;
 
 CastRayResult castRay(vec3 rayOrigin, vec3 direction, uint IGNORE_FLAGS) {
     CastRayResult result = CastRayResult(
-        OBJECT_NOTHING, 0, 20, vec3(0,0,0)
+        OBJECT_NOTHING, 0, 50, vec3(0,0,0)
     );
     uint sphereIgnore = IGNORE_FLAGS & OBJECT_SPHERE;
     for(uint i = 0; i < Spheres.length() && sphereIgnore == 0; i++) {
@@ -155,10 +149,10 @@ CastRayResult castRay(vec3 rayOrigin, vec3 direction, uint IGNORE_FLAGS) {
         }
         float intersectionDistance = (-b-sqrt(discriminant))/(2*a);
         float secondDistance = (-b+sqrt(discriminant))/(2*a);
-        if(secondDistance < intersectionDistance && secondDistance > minIntersection) {
+        if((secondDistance < intersectionDistance || intersectionDistance < minIntersection) && secondDistance > 0) {
             intersectionDistance = secondDistance;
         }
-        if(intersectionDistance <= minIntersection) {
+        if(intersectionDistance < minIntersection) {
             continue;
         }
         if(intersectionDistance < result.hitLength) {
@@ -170,12 +164,15 @@ CastRayResult castRay(vec3 rayOrigin, vec3 direction, uint IGNORE_FLAGS) {
     }
 
     //TEMPORARY
-    for(uint i = 0; i < 2; i++) {
+    for(uint i = 0; i < 1; i++) {
         float nd = dot(planeNormal[i], direction);
         if(nd >= 0) {
             continue;
         }
         float intersectionDistance = dot(planeNormal[i], planeOrigin[i] - rayOrigin)/nd;
+        if(intersectionDistance < minIntersection) {
+            continue;
+        }
         if(intersectionDistance < result.hitLength) {
             result.hitCoord = rayOrigin + direction * intersectionDistance;
             result.hitLength = intersectionDistance;
@@ -189,13 +186,36 @@ CastRayResult castRay(vec3 rayOrigin, vec3 direction, uint IGNORE_FLAGS) {
 
 const float minLuminosity = 0.05;
 
-float rand(vec2 co, float seed){
-  return fract(sin(dot(co * seed, vec2(12.9898,78.233))) * 43758.5453);
+layout(binding = 5) uniform misc {
+    highp uint initialSeed;
+    uint maxRays;
+};
+
+
+const float UINT32_MAX = float(uint(0xFFFFFFFF));
+
+highp uint seed = uint(initialSeed * gl_GlobalInvocationID.x * gl_GlobalInvocationID.y);
+
+struct RandomResult {
+    highp float val;
+    highp uint seed;
+};
+
+RandomResult rand(highp uint seed) {
+    highp uint state =  seed * uint(747796405) + uint(2891336453);
+    highp uint word = ((state >> ((state >> uint(28)) + uint(4))) ^ state) * uint(277803737);
+    seed = (word >> uint(22)) ^ word;
+    return RandomResult(float(seed)/UINT32_MAX, seed);
 }
 
-layout(binding = 5) uniform misc {
-    float initialSeed;
-    uint maxRays;
+
+struct CameraBuffer {
+    float origin[3];
+    float lookDirection[3];
+};
+
+layout(binding = 6) readonly buffer cam_b {
+    CameraBuffer camera;
 };
 
 MaterialBuffer getMaterial(CastRayResult hitObj) {
@@ -249,8 +269,9 @@ vec4 calculateColor(uint rayDepth, CastRayResult hitObj) {
     MaterialBuffer material = getMaterial(hitObj);
     vec3 normal = getNormal(hitObj);
     vec4 color = material.color * minLuminosity;
-    CastRayResult shadowRay = castRay(hitObj.hitCoord + vec3(1,1,1) * minIntersection, -normalize(sunlight.lightData.xyz), OBJECT_NOTHING);
-    if(shadowRay.objectType == OBJECT_NOTHING) {
+    CastRayResult shadowRay = castRay(hitObj.hitCoord + vec3(1,1,1) * minOffset, -normalize(sunlight.lightData.xyz), OBJECT_NOTHING);
+    vec3 camToHit = shadowRay.hitCoord - ArrToVec3(camera.origin);
+    if(shadowRay.objectType == OBJECT_NOTHING || dot(camToHit, camToHit) > 2500) {
         float luminosity = clamp(-dot(normal, sunlight.lightData.xyz),0,1) * sunlight.lightData.w;
         vec4 diffuseComponent = material.color * normalize(sunlight.color) * luminosity; 
         color += diffuseComponent;// * material.roughness
@@ -259,18 +280,58 @@ vec4 calculateColor(uint rayDepth, CastRayResult hitObj) {
 }
 
 const uint MAX_RAYS_SIZE = 20;
+const float worldEta = 1;
+
+vec3 rayGenerate() {
+    vec4 original_dir = convertToViewportCoordinates(ivec2(gl_GlobalInvocationID.xy));
+    vec3 front = ArrToVec3(camera.lookDirection);
+    vec3 up = vec3(0,1,0);
+    vec3 right = normalize(cross(up, front));
+    up = normalize(cross(front, right));
+
+    vec3 direction = original_dir.x * right + original_dir.y * up + original_dir.z * front;
+    return normalize(direction.xyz);
+}
+
+float getReflectance(vec3 rayDir, vec3 normal, float curEta, float refractionIndex, float metallic) {
+    float r0 = (curEta-refractionIndex) / (curEta+refractionIndex);
+    r0 *= r0;
+    float cosX = -dot(normal, rayDir);
+    if (curEta > refractionIndex)
+    {
+        float n = curEta/refractionIndex;
+        float sinT2 = n*n*(1.0-cosX*cosX);
+        // Total internal reflection
+        if (sinT2 > 1.0)
+            return 1.0;
+        cosX = sqrt(1.0-sinT2);
+    }
+    float x = 1.0-cosX;
+    float ret = r0+(1.0-r0)*x*x*x*x*x;
+
+    // adjust reflect multiplier for object reflectivity
+    ret = (metallic + (1.0-metallic) * ret);
+    return ret;
+}
 
 void main() {
+    vec4 outColor = vec4(0,0,0,1);
+
     uint rayCount = 0;
     CastRayResult rayPath[MAX_RAYS_SIZE];
     float weight[MAX_RAYS_SIZE];
+    uint refractionStack[MAX_RAYS_SIZE];
+    uint refractionCount = 0;
+
     weight[0] = 1;
-
-    highp vec3 rayOrigin = vec3(0,0,0);
+    highp vec3 rayOrigin = ArrToVec3(camera.origin);
     highp vec3 rayDir = rayGenerate();
-    vec4 color = vec4(0.5,0.5,0.5,1);
 
-    float seed = initialSeed;    
+    vec4 color = vec4(0.1,0.5,0.9,1);
+    uint seed = uint(gl_GlobalInvocationID.y * imageRes.x + gl_GlobalInvocationID.x) * initialSeed;
+    RandomResult res = rand(seed);
+    float refractCount = 0;
+
     for(;rayCount < maxRays; rayCount++) {
         rayPath[rayCount] = castRay(rayOrigin, rayDir, OBJECT_NOTHING);
         weight[rayCount] = 1; //later i will have absoprtion parameter for this
@@ -283,21 +344,55 @@ void main() {
         vec3 incomingDir = -rayDir;
         vec3 differenceVector = normalize(normal - incomingDir);
         vec3 perpVector = normalize(cross(normal, incomingDir));
-        seed = rand(rayPath[rayCount].hitCoord.xy, seed);
-        float randValue1 = dot(incomingDir, normal)*(2*seed-1);
-        seed = rand(rayPath[rayCount].hitCoord.xy, seed);
-        float randValue2 = dot(incomingDir, normal)*(2*seed-1);
+        RandomResult res = rand(res.seed);
+        float randValue1 = dot(incomingDir, normal)*(2*res.val-1);
+        res = rand(res.seed);
+        float randValue2 = dot(incomingDir, normal)*(2*res.val-1);
+       
+        res = rand(res.seed);
+        vec3 refractDir = vec3(0,0,0);
+        bool shouldPop = false;
+        bool backFace = dot(-rayDir, normal) > 0;
+        vec3 refractNormal = normal;
+        float reflectance = 2;
+        if(res.val >= material.metallic && material.refraction != 0) {
+            if(dot(rayDir, normal) > 0) {
+                refractNormal *= -1;
+                if(refractCount > 0) {
+                    shouldPop = true;
+                }
+            }
+            float curEta = worldEta;
+            if(refractCount > 0) {
+                CastRayResult lastRefractionHit = rayPath[refractionStack[refractionCount-1]];
+                MaterialBuffer lastMaterial = getMaterial(lastRefractionHit);
+                curEta = lastMaterial.refraction;
+            }
+            reflectance = getReflectance(rayDir, normal, curEta, material.refraction, material.metallic);
+            curEta /= material.refraction;
+            refractDir = normalize(refract(rayDir, refractNormal, curEta));
+        }
+        vec3 perfectDir = vec3(0,0,0);
+        res = rand(res.seed);
 
+        if(refractDir == vec3(0,0,0) || (reflectance > res.val && backFace) ) {
+            rayOrigin = rayPath[rayCount].hitCoord + normal * minOffset;
+            perfectDir = reflect(rayDir, normal);
+        } else {
+            perfectDir = refractDir;
+            rayOrigin = rayPath[rayCount].hitCoord - refractNormal * minOffset;
+
+            if(shouldPop) {
+                refractionCount--;
+            } else {
+                refractionStack[refractionCount] = rayCount;
+                refractionCount++;
+            }
+        }
         vec3 roughDir = normalize(normal + (differenceVector * randValue1 + perpVector * randValue2));
-        vec3 perfectDir = reflect(rayDir, normal);
-
         rayDir = mix(perfectDir, roughDir, material.roughness);
-        rayOrigin = rayPath[rayCount].hitCoord;
-        rayOrigin += vec3(1,1,1) * sign(dot(normal, incomingDir)) * minIntersection;
     }
-    if(rayCount == 0) {
-        return;
-    }
+
     rayCount = min(rayCount, maxRays-1);
     while(rayCount < maxRays) {
         color *= weight[rayCount];

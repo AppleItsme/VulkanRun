@@ -21,7 +21,7 @@ typedef enum {
 } EngineDataType;
 
 
-#define ENGINE_DATATYPE_INFO_LENGTH 6
+#define ENGINE_DATATYPE_INFO_LENGTH 7
 typedef struct {
     EngineDataType type;
     uint32_t bindingIndex, count;
@@ -204,3 +204,11 @@ void EngineLoadSunlight(Engine *engine, EngineSunlight sunlight);
 //if indices == NULL, then it starts from 0 and goes to count-1
 void EngineWriteSunlight(Engine *engine, EngineSunlight sunlight);
 void EngineUnloadSunlight(Engine *engine);
+
+typedef struct {
+    float origin[3];
+    float direction[3];
+} EngineCamera;
+
+void EngineCreateCamera(Engine *engine, EngineCamera **camera);
+void EngineDestroyCamera(Engine *engine);
