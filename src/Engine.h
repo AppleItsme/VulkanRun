@@ -21,7 +21,6 @@ typedef enum {
 } EngineDataType;
 
 
-#define ENGINE_DATATYPE_INFO_LENGTH 7
 typedef struct {
     EngineDataType type;
     uint32_t bindingIndex, count;
@@ -128,8 +127,9 @@ void EngineDestroyCommand(Engine *engine, EngineCommand cmd);
 
 void EngineRunShader(Engine *engine, EngineCommand cmd, size_t index, EngineShaderRunInfo runInfo);
 
-extern inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo);
-EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount);
+//for now they're gone; they will make a comeback in the far future
+// extern inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo);
+// EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount);
 
 typedef struct {
     uint32_t startingIndex, 

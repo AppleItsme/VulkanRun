@@ -27,6 +27,7 @@ typedef struct {
 } vulkanQueue;
 
 #define FRAME_OVERLAP 2
+#define ENGINE_DATATYPE_INFO_LENGTH 7
 
 struct Engine {
     VkDevice device;
@@ -674,23 +675,6 @@ EngineResult EngineDrawStart(Engine *engine, EngineColor background, EngineSemap
 	res = vkResetFences(engine->device, 1, &engine->frameFence[engine->cur_frame]);
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_FENCE_NOT_WORKING, res);	
 
-	// VkDescriptorImageInfo renderImageInfo = {
-	// 	.imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-	// 	.imageView = engine->renderImages[engine->cur_frame].imageView,
-	// 	.sampler = VK_NULL_HANDLE
-	// };
-	// VkWriteDescriptorSet writeSet = {
-	// 	.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-	// 	.pNext = NULL,
-	// 	.dstSet = engine->descriptorSet[engine->cur_frame],
-	// 	.dstBinding = 0,
-	// 	.dstArrayElement = 0,
-	// 	.descriptorCount = 1,
-	// 	.pImageInfo = &renderImageInfo,
-	// 	.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-	// };
-	// vkUpdateDescriptorSets(engine->device, 1, &writeSet, 0, NULL);
-
 	VkCommandBufferBeginInfo beginInfo = {
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
@@ -869,6 +853,96 @@ EngineResult EngineInit(Engine **engine_instance, EngineCI engineCI, uintptr_t *
 	*vkInstance = engine->instance;
 	return ENGINE_RESULT_SUCCESS;
 };
+
+#define ENGINE_DATATYPE(B, T) (EngineDataTypeInfo) {.bindingIndex = B, .count = 1, .type = T}
+
+
+#define BINDING_SPHERE_BUFFER 1
+#define BINDING_MATERIAL_BUFFER 3
+#define BINDING_TRANSFORMATION_BUFFER 2
+#define BINDING_SUNLIGHT_BUFFER 4
+#define BINDING_MISC_BUFFER 5
+#define BINDING_CAMERA_BUFFER 6
+#define BINDING_SECONDARY_RAYS_BUFFER 7
+
+inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo) {
+	dataTypeInfo[0] = ENGINE_DATATYPE(0, ENGINE_IMAGE);
+	dataTypeInfo[BINDING_SPHERE_BUFFER] = ENGINE_DATATYPE(BINDING_SPHERE_BUFFER, ENGINE_BUFFER_STORAGE);
+	dataTypeInfo[BINDING_TRANSFORMATION_BUFFER] = ENGINE_DATATYPE(BINDING_TRANSFORMATION_BUFFER, ENGINE_BUFFER_STORAGE);
+	dataTypeInfo[BINDING_MATERIAL_BUFFER] = ENGINE_DATATYPE(BINDING_MATERIAL_BUFFER, ENGINE_BUFFER_UNIFORM);
+	dataTypeInfo[BINDING_SUNLIGHT_BUFFER] = ENGINE_DATATYPE(BINDING_SUNLIGHT_BUFFER, ENGINE_BUFFER_UNIFORM);
+	dataTypeInfo[BINDING_MISC_BUFFER] = ENGINE_DATATYPE(BINDING_MISC_BUFFER, ENGINE_BUFFER_UNIFORM);
+	dataTypeInfo[BINDING_CAMERA_BUFFER] = ENGINE_DATATYPE(BINDING_CAMERA_BUFFER, ENGINE_BUFFER_STORAGE);
+}
+
+
+EngineResult EngineDeclareDataSet(Engine *engine) {
+	EngineDataTypeInfo datatypes[ENGINE_DATATYPE_INFO_LENGTH] = {0};
+	EngineGenerateDataTypeInfo(datatypes);
+	VkDescriptorSetLayoutBinding *bindings = malloc(sizeof(VkDescriptorSetLayoutBinding) * ENGINE_DATATYPE_INFO_LENGTH);
+	VkDescriptorPoolSize *poolSizes = malloc(sizeof(VkDescriptorPoolSize) * ENGINE_DATATYPE_INFO_LENGTH);
+	for(int i = 0; i < ENGINE_DATATYPE_INFO_LENGTH; i++) {
+		VkDescriptorType type = 0;
+		switch(datatypes[i].type) {
+			case ENGINE_BUFFER_STORAGE:
+				type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+				break;
+			case ENGINE_BUFFER_UNIFORM:
+				type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+				break;
+			case ENGINE_IMAGE:
+				type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+				break;
+		}
+		bindings[i] = (VkDescriptorSetLayoutBinding) {
+			.binding = datatypes[i].bindingIndex,
+			.descriptorType = type,
+			.descriptorCount = datatypes[i].count,
+			.pImmutableSamplers = NULL, //for now we keep it NULL. Consider looking at it later
+			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT //consider ALL_SHADERS tho
+		};
+		poolSizes[i] = (VkDescriptorPoolSize) {
+			.descriptorCount = datatypes[i].count * FRAME_OVERLAP,
+			.type = type
+		};
+	}
+	VkDescriptorSetLayoutCreateInfo layoutCI = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		.pNext = NULL,
+		.bindingCount = ENGINE_DATATYPE_INFO_LENGTH,
+		.pBindings = bindings,
+		.flags = 0
+	};
+	res = vkCreateDescriptorSetLayout(engine->device, &layoutCI, NULL, &engine->descriptorSetLayout);
+	ERR_CHECK(res == VK_SUCCESS, ENGINE_DATASET_DECLARATION_FAILED, res);
+	debug_msg("Descriptor set layout created\n");
+	free(bindings);
+	VkDescriptorPoolCreateInfo poolCI = {
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+		.maxSets = FRAME_OVERLAP,
+		.poolSizeCount = ENGINE_DATATYPE_INFO_LENGTH,
+		.pPoolSizes = poolSizes,
+		.pNext = NULL,
+		.flags = 0
+	};
+	res = vkCreateDescriptorPool(engine->device, &poolCI, NULL, &engine->descriptorPool);
+	debug_msg("Descriptor pool created\n");
+	free(poolSizes);
+	ERR_CHECK(res == VK_SUCCESS, ENGINE_DATASET_DECLARATION_FAILED, res);
+	VkDescriptorSetLayout layouts[2] = {engine->descriptorSetLayout, engine->descriptorSetLayout};
+	VkDescriptorSetAllocateInfo allocateInfo = {
+		.descriptorPool = engine->descriptorPool,
+		.descriptorSetCount = 2,
+		.pNext = NULL,
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+		.pSetLayouts = layouts,
+	};	
+	res = vkAllocateDescriptorSets(engine->device, &allocateInfo, engine->descriptorSet);
+	ERR_CHECK(res == VK_SUCCESS, ENGINE_DATASET_DECLARATION_FAILED, res);
+	debug_msg("Descriptor set created\n");
+	return ENGINE_RESULT_SUCCESS;
+}
+
 EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface, EngineObjectLimits limits) {
 
 	engine->limits = limits;
@@ -1022,12 +1096,8 @@ EngineResult EngineFinishSetup(Engine *engine, uintptr_t surface, EngineObjectLi
 	engine->materialBuffer = (EngineBuffer){0};
 	engine->cameraBuffer = (EngineBuffer){0};
 
-	//TODO
-	//decide whether to let the user generate datatypes or we control it
-	//if we let the USER control it then its easier on the engine to let them have their own variables
-	//on the other hand its less work for them if ENGINE controls it
-
 	EngineCreateHeapArray(&engine->writeQueue);
+	EngineDeclareDataSet(engine);
 	debug_msg("Initialisation complete\n");
 	return ENGINE_RESULT_SUCCESS;
 }
@@ -1110,93 +1180,6 @@ EngineResult EngineLoadShaders(Engine *engine, EngineShaderInfo *shaders, size_t
 	ERR_CHECK(res == VK_SUCCESS, ENGINE_SHADER_CREATION_FAILED, res);
 	
 
-	return ENGINE_RESULT_SUCCESS;
-}
-
-#define ENGINE_DATATYPE(B, T) (EngineDataTypeInfo) {.bindingIndex = B, .count = 1, .type = T}
-
-
-#define BINDING_SPHERE_BUFFER 1
-#define BINDING_MATERIAL_BUFFER 3
-#define BINDING_TRANSFORMATION_BUFFER 2
-#define BINDING_SUNLIGHT_BUFFER 4
-#define BINDING_MISC_BUFFER 5
-#define BINDING_CAMERA_BUFFER 6
-
-
-inline void EngineGenerateDataTypeInfo(EngineDataTypeInfo *dataTypeInfo) {
-	dataTypeInfo[0] = ENGINE_DATATYPE(0, ENGINE_IMAGE);
-	dataTypeInfo[BINDING_SPHERE_BUFFER] = ENGINE_DATATYPE(BINDING_SPHERE_BUFFER, ENGINE_BUFFER_STORAGE);
-	dataTypeInfo[BINDING_TRANSFORMATION_BUFFER] = ENGINE_DATATYPE(BINDING_TRANSFORMATION_BUFFER, ENGINE_BUFFER_STORAGE);
-	dataTypeInfo[BINDING_MATERIAL_BUFFER] = ENGINE_DATATYPE(BINDING_MATERIAL_BUFFER, ENGINE_BUFFER_UNIFORM);
-	dataTypeInfo[BINDING_SUNLIGHT_BUFFER] = ENGINE_DATATYPE(BINDING_SUNLIGHT_BUFFER, ENGINE_BUFFER_UNIFORM);
-	dataTypeInfo[BINDING_MISC_BUFFER] = ENGINE_DATATYPE(BINDING_MISC_BUFFER, ENGINE_BUFFER_UNIFORM);
-	dataTypeInfo[BINDING_CAMERA_BUFFER] = ENGINE_DATATYPE(BINDING_CAMERA_BUFFER, ENGINE_BUFFER_STORAGE);
-}
-
-
-EngineResult EngineDeclareDataSet(Engine *engine, EngineDataTypeInfo *datatypes, size_t datatypeCount) {
-	VkDescriptorSetLayoutBinding *bindings = malloc(sizeof(VkDescriptorSetLayoutBinding) * datatypeCount);
-	VkDescriptorPoolSize *poolSizes = malloc(sizeof(VkDescriptorPoolSize) * datatypeCount);
-	for(int i = 0; i < datatypeCount; i++) {
-		VkDescriptorType type = 0;
-		switch(datatypes[i].type) {
-			case ENGINE_BUFFER_STORAGE:
-				type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-				break;
-			case ENGINE_BUFFER_UNIFORM:
-				type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-				break;
-			case ENGINE_IMAGE:
-				type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-				break;
-		}
-		bindings[i] = (VkDescriptorSetLayoutBinding) {
-			.binding = datatypes[i].bindingIndex,
-			.descriptorType = type,
-			.descriptorCount = datatypes[i].count,
-			.pImmutableSamplers = NULL, //for now we keep it NULL. Consider looking at it later
-			.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT //consider ALL_SHADERS tho
-		};
-		poolSizes[i] = (VkDescriptorPoolSize) {
-			.descriptorCount = datatypes[i].count * FRAME_OVERLAP,
-			.type = type
-		};
-	}
-	VkDescriptorSetLayoutCreateInfo layoutCI = {
-		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		.pNext = NULL,
-		.bindingCount = datatypeCount,
-		.pBindings = bindings,
-		.flags = 0
-	};
-	res = vkCreateDescriptorSetLayout(engine->device, &layoutCI, NULL, &engine->descriptorSetLayout);
-	ERR_CHECK(res == VK_SUCCESS, ENGINE_DATASET_DECLARATION_FAILED, res);
-	debug_msg("Descriptor set layout created\n");
-	free(bindings);
-	VkDescriptorPoolCreateInfo poolCI = {
-		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-		.maxSets = FRAME_OVERLAP,
-		.poolSizeCount = datatypeCount,
-		.pPoolSizes = poolSizes,
-		.pNext = NULL,
-		.flags = 0
-	};
-	res = vkCreateDescriptorPool(engine->device, &poolCI, NULL, &engine->descriptorPool);
-	debug_msg("Descriptor pool created\n");
-	free(poolSizes);
-	ERR_CHECK(res == VK_SUCCESS, ENGINE_DATASET_DECLARATION_FAILED, res);
-	VkDescriptorSetLayout layouts[2] = {engine->descriptorSetLayout, engine->descriptorSetLayout};
-	VkDescriptorSetAllocateInfo allocateInfo = {
-		.descriptorPool = engine->descriptorPool,
-		.descriptorSetCount = 2,
-		.pNext = NULL,
-		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-		.pSetLayouts = layouts,
-	};	
-	res = vkAllocateDescriptorSets(engine->device, &allocateInfo, engine->descriptorSet);
-	ERR_CHECK(res == VK_SUCCESS, ENGINE_DATASET_DECLARATION_FAILED, res);
-	debug_msg("Descriptor set created\n");
 	return ENGINE_RESULT_SUCCESS;
 }
 

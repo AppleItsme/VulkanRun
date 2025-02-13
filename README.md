@@ -130,7 +130,10 @@ buffer | Binding Index
 `SphereBuffer` | 1
 `TransformationBuffer` | 2
 `MaterialBuffer` | 3
-`LightSourceBuffer` | 4
-`TextureBuffer` | 5
-`NormalBuffer` | 6
+`SunlightBuffer` | 4
+`Misc` | 5 <-- TEMPORARY
+`Camera` | 6
+`SecondaryRayBuffer` | 7
+<!-- `TextureBuffer` | 5
+`NormalBuffer` | 6 -->
 <!-- `TriangleBuffer` | 1 -->

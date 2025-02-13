@@ -129,14 +129,6 @@ int main() {
 
 	EngineFinishSetup(engine_instance, surface, limits);
 
-	EngineDataTypeInfo infos[ENGINE_DATATYPE_INFO_LENGTH] = {0};
-	EngineGenerateDataTypeInfo(infos);
-	res = EngineDeclareDataSet(engine_instance, infos, ENGINE_DATATYPE_INFO_LENGTH);
-	if(res.EngineCode != ENGINE_SUCCESS) {
-		printf("bad descriptor set\n");
-		return;
-	}
-
 	glfwGetFramebufferSize(window, &bufferSize.width, &bufferSize.height);
 	glfwSetWindowSizeCallback(window, window_size_callback);
 	EngineSwapchainCreate(engine_instance, bufferSize.width, bufferSize.height);
@@ -176,7 +168,7 @@ int main() {
 			.isNormalPresent = false,
 			.isTexturePresent = false,
 			.metallic = 0,
-			.roughness = 0.1,
+			.roughness = 0,
 			.refraction = 1.33,
 		},
 		{
@@ -243,7 +235,6 @@ int main() {
 			.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
 		},
 	};
-
 	EngineSphere *sphereArr[MAX_SPHERE_COUNT] = {0};
 	size_t sphereCount = 0;
 	size_t ID = 0;
