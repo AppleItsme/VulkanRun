@@ -169,7 +169,7 @@ int main() {
 			.isTexturePresent = false,
 			.metallic = 0,
 			.roughness = 0,
-			.refraction = 1.33,
+			.refraction = 1.57,
 		},
 		{
 			.color = {0,0,1,0},
