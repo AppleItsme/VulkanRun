@@ -224,6 +224,7 @@ layout(binding = 6) readonly buffer cam_b {
 
 MaterialBuffer getMaterial(CastRayResult hitObj) {
     MaterialBuffer material;
+    material.color = vec4(-1,-1,-1,-1);
     switch(hitObj.objectType) {
         case OBJECT_PLANE:
             if(hitObj.hitIndex == 0) {
@@ -237,7 +238,6 @@ MaterialBuffer getMaterial(CastRayResult hitObj) {
                 material.roughness = 0.7;
                 material.refraction = 0;
             }
-
             break;
         case OBJECT_SPHERE:
             material = Materials[Spheres[hitObj.hitIndex].materialIndex]; 
@@ -264,13 +264,24 @@ vec3 getNormal(CastRayResult hitObj) {
     return normal;
 }
 
-const vec3 lightData = vec3(1,1,1);
 const uint MAX_RAYS_BOUNCE_SIZE = 20;
-const uint MAX_SECONDARY_RAYS_SIZE = 3;
-const uint MAX_SECONDARY_RAYS_BOUNCE_SIZE = 10;
+const uint MAX_SECONDARY_RAYS_SIZE = 1;
+const uint MAX_SECONDARY_RAYS_BOUNCE_SIZE = 3;
+const float WEIGHT_THRESHOLD = 0.1;
 const float worldEta = 1;
 
-RandomResult res;
+Ray rayGenerate() {
+    vec4 original_dir = convertToViewportCoordinates(ivec2(gl_GlobalInvocationID.xy));
+    vec3 front = ArrToVec3(camera.lookDirection);
+    vec3 up = vec3(0,1,0);
+    vec3 right = normalize(cross(up, front));
+    up = normalize(cross(front, right));
+
+    vec3 direction = normalize(original_dir.x * right + original_dir.y * up + original_dir.z * front);
+    return Ray(
+        ArrToVec3(camera.origin), direction
+    );
+}
 
 float getReflectance(vec3 rayDir, vec3 normal, float curEta, float refractionIndex, float metallic) {
     float r0 = (curEta-refractionIndex) / (curEta+refractionIndex);
@@ -293,228 +304,260 @@ float getReflectance(vec3 rayDir, vec3 normal, float curEta, float refractionInd
     return ret;
 }
 
-vec4 calculateColor(CastRayResult hitObj) {
+struct SecondaryRay {
+    Ray ray;
+    vec4 color;
+    float rayWeight;
+    float refractionStack[MAX_RAYS_BOUNCE_SIZE]; //because we account for accumulated materials
+    uint refractionCount;
+    uint rayCount;
+};
+
+struct RayBounceResult {
+    Ray reflectRay;
+    Ray refractRay;
+    bool refracted;
+    float reflectance;
+};
+
+RandomResult res;
+
+RayBounceResult calculateRayBounce(Ray incomingRay, CastRayResult hit, float currentRefraction) {
+    RayBounceResult result;
+   
+    vec3 normal = getNormal(hit);
+
+    vec3 incomingDir = -incomingRay.direction;
+    vec3 differenceVector = normalize(normal - incomingDir);
+    vec3 perpVector = normalize(cross(normal, incomingDir));
+    res = rand(res.seed);
+    float randValue1 = dot(incomingDir, normal)*(2*res.val-1);
+    res = rand(res.seed);
+    float randValue2 = dot(incomingDir, normal)*(2*res.val-1);
+    vec3 roughDir = normalize(normal + (differenceVector * randValue1 + perpVector * randValue2));
+
+    MaterialBuffer material = getMaterial(hit);
+
+    res = rand(res.seed);
+    vec3 refractDir = vec3(0,0,0);
+    vec3 refractNormal = normal;
+    if(res.val >= material.metallic && material.refraction != 0) {
+        if(dot(incomingDir, normal) < 0) {
+            refractNormal *= -1;
+        }
+        result.reflectance = getReflectance(incomingRay.direction, refractNormal, currentRefraction, material.refraction, material.metallic);
+        currentRefraction /= material.refraction;
+        refractDir = normalize(refract(incomingRay.direction, refractNormal, currentRefraction));
+    }
+    result.refracted = refractDir != vec3(0,0,0);
+    vec3 reflectDir = normalize(reflect(incomingRay.direction, normal));
+
+    result.reflectRay.direction = mix(reflectDir, roughDir, material.roughness);
+    result.reflectRay.origin = hit.hitCoord + normal * minOffset;
+
+    result.refractRay.direction = mix(refractDir, roughDir, material.roughness);
+    result.refractRay.origin = hit.hitCoord - refractNormal * minOffset;
+    return result;
+}
+
+vec4 calculateColor(CastRayResult hitObj, float refractionStack[MAX_RAYS_BOUNCE_SIZE], uint refractionCount) {
     if(hitObj.objectType == OBJECT_NOTHING) {
         return vec4(-1,-1,-1,-1);
     }
     MaterialBuffer material = getMaterial(hitObj);
     vec3 normal = getNormal(hitObj);
     vec4 color = material.color * minLuminosity;
+    vec3 sunDir = normalize(sunlight.lightData.xyz);
+
     Ray shadowRay = Ray(
-        hitObj.hitCoord + vec3(1,1,1) * minOffset, -normalize(sunlight.lightData.xyz)
+        hitObj.hitCoord + normal * minOffset, -sunDir
     );
-    CastRayResult sRayPath[MAX_SECONDARY_RAYS_BOUNCE_SIZE];
-    uint refractionStack[MAX_SECONDARY_RAYS_BOUNCE_SIZE];
-    uint refractionCount = 0;
-    float weight = 1;
+    SecondaryRay secondaryRays[MAX_SECONDARY_RAYS_SIZE];
+    uint secondaryRaysSize = 0;
 
-    MaterialBuffer hitMaterial = getMaterial(hitObj);
-    uint i = 0;
-    for(; i < MAX_SECONDARY_RAYS_BOUNCE_SIZE; i++) {
-        sRayPath[i] = castRay(shadowRay, OBJECT_NOTHING);
-        if(sRayPath[i].objectType == OBJECT_NOTHING) {
+    CastRayResult shadowRayPath[MAX_SECONDARY_RAYS_BOUNCE_SIZE];
+    float accumulatedWeight = 1;
+    uint shadowRayCount = 0;
+    float weight[MAX_SECONDARY_RAYS_BOUNCE_SIZE];
+
+    for(;shadowRayCount < MAX_SECONDARY_RAYS_BOUNCE_SIZE; shadowRayCount++) {
+        shadowRayPath[shadowRayCount] = castRay(shadowRay, OBJECT_NOTHING);
+        weight[shadowRayCount] = clamp(dot(shadowRay.direction, -sunDir), 0,1);
+        if(shadowRayPath[shadowRayCount].objectType == OBJECT_NOTHING) {
             break;
         }
-        MaterialBuffer material = getMaterial(sRayPath[i]);
-        weight *= 1-material.roughness;
-        vec3 normal = getNormal(sRayPath[i]);
-        vec3 incomingDir = -shadowRay.direction;
-        vec3 differenceVector = normalize(normal - incomingDir);
-        vec3 perpVector = normalize(cross(normal, incomingDir));
-        RandomResult res = rand(res.seed);
-        float randValue1 = dot(incomingDir, normal)*(2*res.val-1);
-        res = rand(res.seed);
-        float randValue2 = dot(incomingDir, normal)*(2*res.val-1);
-
-        res = rand(res.seed);
-        vec3 refractDir = vec3(0,0,0);
-        bool shouldPop = false;
-        bool frontFace = dot(-shadowRay.direction, normal) > 0;
-        vec3 refractNormal = normal;
-        float reflectance = 2;
-        if(res.val < material.metallic || material.refraction == 0) {
-            break;
-        }
-        if(!frontFace) {
-            refractNormal *= -1;
-            shouldPop = refractionCount > 0;
-        }
-        float curEta = worldEta;
-        if(refractionCount > 0) {
-            uint refractionIndex = refractionStack[refractionCount-1];
-            CastRayResult lastRefractionHit = sRayPath[refractionIndex];
-            MaterialBuffer lastMaterial = getMaterial(lastRefractionHit);
-            curEta = lastMaterial.refraction;
-        }
-        res = rand(res.seed);
-        reflectance = getReflectance(shadowRay.direction, normal, curEta, material.refraction, material.metallic);
-        curEta /= material.refraction;
-        refractDir = normalize(refract(shadowRay.direction, refractNormal, curEta));
-        if(refractDir == vec3(0,0,0) || res.val >= reflectance) {
+        MaterialBuffer material = getMaterial(shadowRayPath[shadowRayCount]);
+        weight[shadowRayCount] *= 1-material.roughness;
+        accumulatedWeight *= weight[shadowRayCount];
+        if(accumulatedWeight < WEIGHT_THRESHOLD) {
+            weight[shadowRayCount] = 0;
+            shadowRayCount++;
             break;
         }
         Ray candidateRays[2];
         uint chosenRay = 0;
-        
-        if(frontFace) {
-            candidateRays[0].direction = reflect(shadowRay.direction, normal);
-            candidateRays[0].origin = sRayPath[i].hitCoord + normal * minOffset;
-        } 
-        if(refractDir != vec3(0,0,0)) {
-            candidateRays[1].direction = refractDir;
-            candidateRays[1].origin = sRayPath[i].hitCoord - refractNormal * minOffset;
-        }
-        res = rand(res.seed);
-        chosenRay = uint(refractDir != vec3(0,0,0) && (reflectance < res.val || !frontFace));
+        float curEta = refractionCount > 0 ? refractionStack[refractionCount-1] : worldEta;
 
-        if(chosenRay == 1) { //its clearer this way
-            if(shouldPop && refractionCount > 0) {
+        RayBounceResult rayBounce = calculateRayBounce(shadowRay, shadowRayPath[shadowRayCount], curEta);
+        candidateRays[0] = rayBounce.reflectRay;
+        candidateRays[1] = rayBounce.refractRay;
+        chosenRay = uint(rayBounce.refracted && rayBounce.reflectance < 0.5);
+        if(rayBounce.refracted && secondaryRaysSize < MAX_SECONDARY_RAYS_SIZE) { //now in case we fr have two rays
+            secondaryRays[secondaryRaysSize].ray = candidateRays[1-chosenRay];
+            secondaryRays[secondaryRaysSize].rayWeight = chosenRay == 0 ? rayBounce.reflectance : 1-rayBounce.reflectance;
+            secondaryRays[secondaryRaysSize].refractionStack = refractionStack;
+            secondaryRays[secondaryRaysSize].refractionCount = refractionCount;
+            secondaryRays[secondaryRaysSize].rayCount = shadowRayCount;
+            secondaryRaysSize++;
+        }
+        if(chosenRay == 1) {
+            if(refractionCount > 0) {
                 refractionCount--;
-            } else if (!shouldPop){
-                refractionStack[refractionCount] = i;
+            } else {
+                refractionStack[refractionCount] = material.refraction;
                 refractionCount++;
             }
         }
-        vec3 roughDir = normalize(normal + (differenceVector * randValue1 + perpVector * randValue2));
-        shadowRay.origin = candidateRays[chosenRay].origin;
-        shadowRay.direction = mix(candidateRays[chosenRay].direction, roughDir, material.roughness);
+        shadowRay = candidateRays[chosenRay];
+    }
+    uint secondaryRayCount = 0;
+    bool noSecondaryGenerated = secondaryRaysSize == 0;
+    float sAccumulatedWeight[MAX_SECONDARY_RAYS_SIZE];
+
+    while(secondaryRayCount < secondaryRaysSize && !noSecondaryGenerated) {
+        uint i = 0;
+        CastRayResult sRayPath[MAX_SECONDARY_RAYS_BOUNCE_SIZE];
+        sAccumulatedWeight[secondaryRayCount] = 1;
+
+        for(; i < MAX_SECONDARY_RAYS_BOUNCE_SIZE; i++) {
+            sRayPath[i] = castRay(secondaryRays[secondaryRayCount].ray, OBJECT_NOTHING);
+            if(sRayPath[i].objectType == OBJECT_NOTHING) {
+                break;
+            }
+            MaterialBuffer sMaterial = getMaterial(sRayPath[i]);
+            sAccumulatedWeight[secondaryRayCount] *= (1-sMaterial.roughness) * clamp(dot(secondaryRays[secondaryRayCount].ray.direction, -sunDir), 0, 1);
+            if(sAccumulatedWeight[secondaryRayCount] < WEIGHT_THRESHOLD) {
+                i++;
+                sAccumulatedWeight[secondaryRayCount] = 0;
+                break;
+            }
+            float curEta = worldEta;
+            if(secondaryRays[secondaryRayCount].refractionCount > 0) {
+                curEta = secondaryRays[secondaryRayCount].refractionStack[secondaryRays[secondaryRayCount].refractionCount-1];
+            }
+
+            RayBounceResult rayBounce = calculateRayBounce(secondaryRays[secondaryRayCount].ray, sRayPath[i], curEta);
+            Ray candidateRays[2];
+            uint chosenRay = 0;            
+            candidateRays[0] = rayBounce.reflectRay;
+            candidateRays[1] = rayBounce.refractRay;
+            res = rand(res.seed);
+            chosenRay = uint(rayBounce.refracted && rayBounce.reflectance < res.val);
+
+            if(chosenRay == 1) { //its clearer this way
+                if(secondaryRays[secondaryRayCount].refractionCount > 0) {
+                    secondaryRays[secondaryRayCount].refractionCount--;
+                } else {
+                    secondaryRays[secondaryRayCount].refractionStack[secondaryRays[secondaryRayCount].refractionCount] = material.refraction;
+                    secondaryRays[secondaryRayCount].refractionCount++;
+                }
+            }
+            secondaryRays[secondaryRayCount].ray = candidateRays[chosenRay];
+        }
+        secondaryRayCount++;
     }
 
-    vec3 camToHit = sRayPath[i].hitCoord - ArrToVec3(camera.origin);
-    if(sRayPath[i].objectType == OBJECT_NOTHING || dot(camToHit, camToHit) > 2500) {
-        float luminosity = clamp(-dot(normal, sunlight.lightData.xyz),0,1) * sunlight.lightData.w;
-        vec4 diffuseComponent = material.color * normalize(sunlight.color) * luminosity; 
-        color += diffuseComponent * weight;
+    uint i = min(shadowRayCount, MAX_SECONDARY_RAYS_BOUNCE_SIZE-1);
+    secondaryRaysSize = min(secondaryRaysSize, MAX_SECONDARY_RAYS_SIZE-1);
+    accumulatedWeight = 1;
+    while(i < MAX_SECONDARY_RAYS_BOUNCE_SIZE && shadowRayCount != 0) {
+        accumulatedWeight *= weight[i];
+        if(!noSecondaryGenerated && i == secondaryRays[secondaryRaysSize].rayCount) {
+            accumulatedWeight = mix(sAccumulatedWeight[secondaryRaysSize], accumulatedWeight, secondaryRays[secondaryRaysSize].rayWeight);
+            noSecondaryGenerated = secondaryRaysSize == 0;
+            secondaryRaysSize--;
+        }
+        i--;
     }
+    float luminosity = clamp(-dot(normal, sunDir),0,1) * (minLuminosity + sunlight.lightData.w) * accumulatedWeight;
+    vec4 diffuseComponent = material.color * normalize(sunlight.color) * luminosity; 
+    color += diffuseComponent;
+    
     return color;
 }
 
-Ray camRayGenerate() {
-    vec4 original_dir = convertToViewportCoordinates(ivec2(gl_GlobalInvocationID.xy));
-    vec3 front = ArrToVec3(camera.lookDirection);
-    vec3 up = vec3(0,1,0);
-    vec3 right = normalize(cross(up, front));
-    up = normalize(cross(front, right));
-
-    vec3 direction = normalize(original_dir.x * right + original_dir.y * up + original_dir.z * front);
-    return Ray(
-        ArrToVec3(camera.origin), direction
-    );
-}
-
-struct SecondaryRay {
-    Ray ray;
-    vec4 color;
-    float rayWeight;
-    uint refractionStack[MAX_RAYS_BOUNCE_SIZE]; //because we account for accumulated materials
-    uint refractionCount;
-    uint rayCount;
-};
 
 void main() {
-    vec4 outColor = vec4(0,0,0,1);
-
-    uint rayCount = 0;
     CastRayResult rayPath[MAX_RAYS_BOUNCE_SIZE];
     float weight[MAX_RAYS_BOUNCE_SIZE];
-    uint refractionStack[MAX_RAYS_BOUNCE_SIZE];
+    float accumulatedWeight = 1;
+    float refractionStack[MAX_RAYS_BOUNCE_SIZE];
     uint refractionCount = 0;
 
     SecondaryRay secondaryRays[MAX_SECONDARY_RAYS_SIZE];
     uint secondaryRaysSize = 0;
 
     weight[0] = 1;
-    Ray mainRay = camRayGenerate();
+    Ray mainRay = rayGenerate();
 
     vec4 color = vec4(0.1,0.5,0.9,1);
     uint seed = uint(gl_GlobalInvocationID.y * imageRes.x + gl_GlobalInvocationID.x) * initialSeed;
     res = rand(seed);
 
+    uint rayCount = 0;
     for(;rayCount < maxRays; rayCount++) {
+        weight[rayCount] = 1;
         rayPath[rayCount] = castRay(mainRay, OBJECT_NOTHING);
-        weight[rayCount] = 1; //later i will have absoprtion parameter for this
         if(rayPath[rayCount].objectType == OBJECT_NOTHING) {
             break;
         }
         MaterialBuffer material = getMaterial(rayPath[rayCount]);
-        weight[rayCount] = 1-material.roughness; 
-        if(weight[rayCount] == 0) {
+        weight[rayCount] = 1-material.roughness;
+        accumulatedWeight *= weight[rayCount];
+        if(accumulatedWeight < WEIGHT_THRESHOLD) {
+            rayCount++;
             break;
-        }
-        vec3 normal = getNormal(rayPath[rayCount]);
-        vec3 incomingDir = -mainRay.direction;
-        vec3 differenceVector = normalize(normal - incomingDir);
-        vec3 perpVector = normalize(cross(normal, incomingDir));
-        RandomResult res = rand(res.seed);
-        float randValue1 = dot(incomingDir, normal)*(2*res.val-1);
-        res = rand(res.seed);
-        float randValue2 = dot(incomingDir, normal)*(2*res.val-1);
-       
-        res = rand(res.seed);
-        vec3 refractDir = vec3(0,0,0);
-        bool shouldPop = false;
-        bool frontFace = dot(-mainRay.direction, normal) > 0;
-        vec3 refractNormal = normal;
-        float reflectance = 0;
-        if(res.val >= material.metallic && material.refraction != 0) {
-            if(!frontFace) {
-                refractNormal *= -1;
-                if(refractionCount > 0) {
-                    shouldPop = true;
-                }
-            }
-            float curEta = worldEta;
-            if(refractionCount > 0) {
-                CastRayResult lastRefractionHit = rayPath[refractionStack[refractionCount-1]];
-                MaterialBuffer lastMaterial = getMaterial(lastRefractionHit);
-                curEta = lastMaterial.refraction;
-            }
-            reflectance = getReflectance(mainRay.direction, normal, curEta, material.refraction, material.metallic);
-            curEta /= material.refraction;
-            refractDir = normalize(refract(mainRay.direction, refractNormal, curEta));
         }
         Ray candidateRays[2];
         uint chosenRay = 0;
-        if(frontFace) {
-            candidateRays[0].direction = reflect(mainRay.direction, normal);
-            candidateRays[0].origin = rayPath[rayCount].hitCoord + normal * minOffset;
-        } 
-        if(refractDir != vec3(0,0,0)) {
-            candidateRays[1].direction = refractDir;
-            candidateRays[1].origin = rayPath[rayCount].hitCoord - refractNormal * minOffset;
-        }
-        chosenRay = uint(refractDir != vec3(0,0,0) && (reflectance < 0.5 || !frontFace));
+        float curEta = refractionCount > 0 ? refractionStack[refractionCount-1] : worldEta;
 
-        if(refractDir != vec3(0,0,0) && frontFace && secondaryRaysSize < MAX_SECONDARY_RAYS_SIZE) { //now in case we fr have two rays
+        RayBounceResult rayBounce = calculateRayBounce(mainRay, rayPath[rayCount], curEta);
+        candidateRays[0] = rayBounce.reflectRay;
+        candidateRays[1] = rayBounce.refractRay;
+        chosenRay = uint(rayBounce.refracted && rayBounce.reflectance < 0.5);
+
+        if(rayBounce.refracted && secondaryRaysSize < MAX_SECONDARY_RAYS_SIZE) { //now in case we fr have two rays
             secondaryRays[secondaryRaysSize].ray = candidateRays[1-chosenRay];
-            secondaryRays[secondaryRaysSize].rayWeight = (chosenRay == 0 ? reflectance : 1-reflectance);
+            secondaryRays[secondaryRaysSize].rayWeight = chosenRay == 0 ? rayBounce.reflectance : 1-rayBounce.reflectance;
             secondaryRays[secondaryRaysSize].refractionStack = refractionStack;
             secondaryRays[secondaryRaysSize].refractionCount = refractionCount;
             secondaryRays[secondaryRaysSize].rayCount = rayCount;
             secondaryRaysSize++;
         }
-        if(bool(chosenRay)) {
-            if(shouldPop) {
+        if(chosenRay == 1) {
+            if(refractionCount > 0) {
                 refractionCount--;
             } else {
-                refractionStack[refractionCount] = rayCount;
+                refractionStack[refractionCount] = material.refraction;
                 refractionCount++;
             }
         }
-        vec3 roughDir = normalize(normal + (differenceVector * randValue1 + perpVector * randValue2));
-        mainRay.origin = candidateRays[chosenRay].origin;
-        mainRay.direction = mix(candidateRays[chosenRay].direction, roughDir, material.roughness);
+        mainRay = candidateRays[chosenRay];
     }
 
 
-    bool checkSecondaryRays = secondaryRaysSize > 0;
+    bool noSecondaryGenerated = secondaryRaysSize == 0;
+    if(rayCount == 0) {
+        return;
+    }
     rayCount = min(rayCount, maxRays-1);
-    secondaryRaysSize -= 1;
-    uint secondaryRayCount = secondaryRaysSize;
-    while(secondaryRayCount < MAX_SECONDARY_RAYS_SIZE && checkSecondaryRays) {
+    uint secondaryRayCount = 0;
+    while(secondaryRayCount < secondaryRaysSize && !noSecondaryGenerated) {
         uint i = 0;
         CastRayResult sRayPath[MAX_SECONDARY_RAYS_BOUNCE_SIZE];
         float sWeight[MAX_SECONDARY_RAYS_BOUNCE_SIZE];
+        float sAccumulatedWeight = 1;
 
         for(; i < MAX_SECONDARY_RAYS_BOUNCE_SIZE; i++) {
             sRayPath[i] = castRay(secondaryRays[secondaryRayCount].ray, OBJECT_NOTHING);
@@ -524,95 +567,65 @@ void main() {
             }
             MaterialBuffer material = getMaterial(sRayPath[i]);
             sWeight[i] = 1-material.roughness; 
-            vec3 normal = getNormal(sRayPath[i]);
-            vec3 incomingDir = -secondaryRays[secondaryRayCount].ray.direction;
-            vec3 differenceVector = normalize(normal - incomingDir);
-            vec3 perpVector = normalize(cross(normal, incomingDir));
-            RandomResult res = rand(res.seed);
-            float randValue1 = dot(incomingDir, normal)*(2*res.val-1);
-            res = rand(res.seed);
-            float randValue2 = dot(incomingDir, normal)*(2*res.val-1);
+            sAccumulatedWeight *= sWeight[i];
+            if(sAccumulatedWeight < WEIGHT_THRESHOLD) {
+                i++;
+                break;
+            }
+            float curEta = worldEta;
+            if(secondaryRays[secondaryRayCount].refractionCount > 0) {
+                curEta = secondaryRays[secondaryRayCount].refractionStack[secondaryRays[secondaryRayCount].refractionCount-1];
+            }
 
-            res = rand(res.seed);
-            vec3 refractDir = vec3(0,0,0);
-            bool shouldPop = false;
-            bool frontFace = dot(-secondaryRays[secondaryRayCount].ray.direction, normal) > 0;
-            vec3 refractNormal = normal;
-            float reflectance = 0;
-            if(res.val >= material.metallic && material.refraction != 0) {
-                if(!frontFace) {
-                    refractNormal *= -1;
-                    shouldPop = refractionCount > 0;
-                }
-                float curEta = worldEta;
-                if(secondaryRays[secondaryRayCount].refractionCount > 0) {
-                    uint refractionIndex = secondaryRays[secondaryRayCount].refractionStack[secondaryRays[secondaryRayCount].refractionCount-1];
-                    CastRayResult lastRefractionHit;
-                    if(refractionIndex > secondaryRays[secondaryRayCount].rayCount) {
-                        lastRefractionHit = sRayPath[refractionIndex - secondaryRays[secondaryRayCount].rayCount];
-                    } else {
-                        lastRefractionHit = rayPath[refractionIndex];
-                    }
-                    MaterialBuffer lastMaterial = getMaterial(lastRefractionHit);
-                    curEta = lastMaterial.refraction;
-                }
-                reflectance = getReflectance(secondaryRays[secondaryRayCount].ray.direction, normal, curEta, material.refraction, material.metallic);
-                curEta /= material.refraction;
-                refractDir = normalize(refract(secondaryRays[secondaryRayCount].ray.direction, refractNormal, curEta));
-            }
+            RayBounceResult rayBounce = calculateRayBounce(secondaryRays[secondaryRayCount].ray, sRayPath[i], curEta);
             Ray candidateRays[2];
-            uint chosenRay = 0;
-            
-            if(frontFace) {
-                candidateRays[0].direction = reflect(secondaryRays[secondaryRayCount].ray.direction, normal);
-                candidateRays[0].origin = sRayPath[i].hitCoord + normal * minOffset;
-            } 
-            if(refractDir != vec3(0,0,0)) {
-                candidateRays[1].direction = refractDir;
-                candidateRays[1].origin = sRayPath[i].hitCoord - refractNormal * minOffset;
-            }
+            uint chosenRay = 0;            
+            candidateRays[0] = rayBounce.reflectRay;
+            candidateRays[1] = rayBounce.refractRay;
             res = rand(res.seed);
-            chosenRay = uint(refractDir != vec3(0,0,0) && (reflectance < res.val || !frontFace));
+            chosenRay = uint(rayBounce.refracted && rayBounce.reflectance < res.val);
 
             if(chosenRay == 1) { //its clearer this way
-                if(shouldPop && secondaryRays[secondaryRayCount].refractionCount > 0) {
+                if(secondaryRays[secondaryRayCount].refractionCount > 0) {
                     secondaryRays[secondaryRayCount].refractionCount--;
-                } else if (!shouldPop){
-                    secondaryRays[secondaryRayCount].refractionStack[secondaryRays[secondaryRayCount].refractionCount] = rayCount + i;
+                } else {
+                    secondaryRays[secondaryRayCount].refractionStack[secondaryRays[secondaryRayCount].refractionCount] = material.refraction;
                     secondaryRays[secondaryRayCount].refractionCount++;
                 }
             }
-            vec3 roughDir = normalize(normal + (differenceVector * randValue1 + perpVector * randValue2));
-            secondaryRays[secondaryRayCount].ray.origin = candidateRays[chosenRay].origin;
-            secondaryRays[secondaryRayCount].ray.direction = mix(candidateRays[chosenRay].direction, roughDir, material.roughness);
+            secondaryRays[secondaryRayCount].ray = candidateRays[chosenRay];
         }
         secondaryRays[secondaryRayCount].color = color;
         i = min(i, MAX_SECONDARY_RAYS_BOUNCE_SIZE-1);
+        if(i == 0) {
+            secondaryRayCount++;
+            continue;
+        }
         while(i < MAX_SECONDARY_RAYS_BOUNCE_SIZE) {
             secondaryRays[secondaryRayCount].color *= sWeight[i];
             if(sRayPath[i].objectType == OBJECT_NOTHING) {
                 i--;
                 continue;
             }
-            vec4 curColor = calculateColor(sRayPath[i]);
+            vec4 curColor = calculateColor(sRayPath[i], secondaryRays[secondaryRayCount].refractionStack, secondaryRays[secondaryRayCount].refractionCount);
             secondaryRays[secondaryRayCount].color = mix(curColor, secondaryRays[secondaryRayCount].color, sWeight[i]);
             i--;
         }
 
-        secondaryRayCount--;
+        secondaryRayCount++;
     }
-
+    secondaryRaysSize = min(secondaryRaysSize, MAX_SECONDARY_RAYS_SIZE-1);
     while(rayCount < maxRays) {
         color *= weight[rayCount];
         if(rayPath[rayCount].objectType == OBJECT_NOTHING) {
             rayCount--;
             continue;
         }
-        vec4 curColor = calculateColor(rayPath[rayCount]);
+        vec4 curColor = calculateColor(rayPath[rayCount], refractionStack, refractionCount);
         color = mix(curColor, color, weight[rayCount]);
-        if(checkSecondaryRays && secondaryRays[secondaryRaysSize].rayCount == rayCount-1) {
+        if(!noSecondaryGenerated && secondaryRays[secondaryRaysSize].rayCount == rayCount) {
             color = mix(secondaryRays[secondaryRaysSize].color, color, secondaryRays[secondaryRaysSize].rayWeight);
-            checkSecondaryRays = secondaryRaysSize > 0;
+            noSecondaryGenerated = secondaryRaysSize == 0;
             secondaryRaysSize--;
         }
         rayCount--;

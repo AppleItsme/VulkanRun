@@ -1,6 +1,8 @@
 # MY VULKAN ENGINE
 It is fully raytraced. For now only software-based raytracing.
 
+use `git clone --recursive`!!
+
 # Maths
 There are 4 spaces. Listing them in the order of transformations:
 1. **Model space** represents position of primitives (usually triangles) relative to the centre of the model. Thats the default starting point and does not need a transformation matrix.

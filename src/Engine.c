@@ -397,7 +397,7 @@ EngineResult findSuitablePhysicalDevice(VkPhysicalDevice *devices, size_t device
 	engine->physicalDevice = bestDeviceStats.device;
 	engine->physicalDeviceProperties = bestDeviceStats.props;
 	engine->swapchainDetails.format = bestDeviceStats.format;
-	engine->swapchainDetails.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+	engine->swapchainDetails.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR; //will be configurable later
 	engine->compute.index = bestDeviceStats.computeI;
 	engine->graphics.index = bestDeviceStats.graphicsI;
 	engine->presentation.index = bestDeviceStats.presentationI;

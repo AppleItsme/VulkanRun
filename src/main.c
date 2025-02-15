@@ -160,7 +160,7 @@ int main() {
 			.isNormalPresent = false,
 			.isTexturePresent = false,
 			.metallic = 0,
-			.roughness = 0.9,
+			.roughness = 1,
 			.refraction = 0,
 		},
 		{
@@ -172,11 +172,19 @@ int main() {
 			.refraction = 1.57,
 		},
 		{
+			.color = {1,1,1,0},
+			.isNormalPresent = false,
+			.isTexturePresent = false,
+			.metallic = 0,
+			.roughness = 0,
+			.refraction = 1,
+		},
+		{
 			.color = {0,0,1,0},
 			.isNormalPresent = false,
 			.isTexturePresent = false,
 			.metallic = 1,
-			.roughness = 0.01,
+			.roughness = 0,
 			.refraction = 0,
 		}
 	};
@@ -198,7 +206,7 @@ int main() {
 			.materialID = 1,
 			.radius = 0.5,
 			.transformation = {
-				.translation = {0,-0.5,2.5},
+				.translation = {0,-0.4,2.5},
 				.rotation = {0,0,0},
 				.scale = {0,0,0}
 			},
@@ -206,6 +214,26 @@ int main() {
 		},
 		{
 			.materialID = 2,
+			.radius = 0.4,
+			.transformation = {
+				.translation = {0,-0.4,2.5},
+				.rotation = {0,0,0},
+				.scale = {0,0,0}
+			},
+			.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
+		},
+		{
+			.materialID = 1,
+			.radius = 0.5,
+			.transformation = {
+				.translation = {2,-0.4,2.5},
+				.rotation = {0,0,0},
+				.scale = {0,0,0}
+			},
+			.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
+		},
+		{
+			.materialID = 3,
 			.radius = 0.75,
 			.transformation = {
 				.translation = {2,0.25,5},
@@ -215,10 +243,10 @@ int main() {
 			.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
 		},
 		{
-			.materialID = 2,
-			.radius = 0.75,
+			.materialID = 0,
+			.radius = 0.25,
 			.transformation = {
-				.translation = {0,2,5},
+				.translation = {2,0.25,5},
 				.rotation = {0,0,0},
 				.scale = {0,0,0}
 			},
@@ -317,7 +345,7 @@ int main() {
 		if(isMinimised) {
 			continue;
 		}
-		EngineColor Color = {0.5, 0.5, 0.5, 1};
+		EngineColor Color = {0.1, 0.5, 0.9, 1};
 		res = EngineDrawStart(engine_instance, Color, &drawWaitSemaphore[EngineGetFrame(engine_instance)]);
 		float time = glfwGetTime();
 		float deltaTime = time - previousTime;
