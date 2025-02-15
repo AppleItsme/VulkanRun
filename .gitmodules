@@ -1,0 +1,12 @@
+[submodule "VulkanMemoryAllocator"]
+	path = ThirdParty/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+[submodule "cglm"]
+	path = ThirdParty/cglm
+	url = https://github.com/recp/cglm.git
+[submodule "glfw"]
+	path = ThirdParty/glfw
+	url = https://github.com/glfw/glfw.git
+[submodule "stb"]
+	path = ThirdParty/stb
+	url = https://github.com/nothings/stb.git
