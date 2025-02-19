@@ -3,14 +3,11 @@ It is fully raytraced. For now only software-based raytracing.
 
 use `git clone --recursive`!!
 
-# Maths
-There are 4 spaces. Listing them in the order of transformations:
-1. **Model space** represents position of primitives (usually triangles) relative to the centre of the model. Thats the default starting point and does not need a transformation matrix.
-2. **World space** represents the position of meshes in the world.
-3. **View space** represents the position of meshes relative to the camera's position in the world.
-4. **Screen space** represents the pixels that each mesh occupies
 
-$\quad$ Each primitive first needs to get transformed from model to world space, then from world to view space and lastly from view to screen space.
+# Maths
+There are 2 spaces. Listing them in the order of transformations:
+1. **World/View space** represents the position of meshes in the world.
+2. **Screen space** represents the pixels that each mesh occupies
 
 ## General transformations
  - Rotation function along the plane $e_{ij}$:
@@ -38,7 +35,7 @@ $\qquad$ The GPU will compute the rotation-scale-translation matrix on its own a
 \end{bmatrix}
 ```
 ## Transformation stages
-Model to World space:
+<!-- Model to World space:
 
 $\qquad$ From model to World space all we have to do is scale, translate and rotate the points along the user defined setup. Hence for each triangle we send the following inputs:
 
@@ -48,8 +45,8 @@ $\qquad$ From model to World space all we have to do is scale, translate and rot
 \theta_y & y_{scale} & y_{origin}\\
 \theta_z & z_{scale} & z_{origin}
 \end{bmatrix}
-```
-
+``` -->
+<!-- 
 World to View space:
 
 $\qquad$ The world needs to do the inverse of the rotation and translation matrices as opposed to the transformation experienced by the camera. So we take the same matrix and use negative angles and negative translations. Basically we send this:
@@ -60,7 +57,7 @@ $\qquad$ The world needs to do the inverse of the rotation and translation matri
 -\theta_y & y_{scale} & -y_{origin}\\
 -\theta_z & z_{scale} & -z_{origin}
 \end{bmatrix}
-```
+``` -->
 
 View to Screen space:
 
@@ -78,6 +75,7 @@ $\qquad$ View to screen space matrix (**NOTE** the x and y components have to ha
 # GPU interface
 
 ## Structs and data format
+**slightly outdated**
 For transformations of meshes, we have `TransformationBuffer`:
 ```c
 struct TransformationBuffer {
