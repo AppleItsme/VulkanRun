@@ -35,6 +35,7 @@ include_directories(ThirdParty/cglm/include)
 include_directories(ThirdParty/stb)
 target_include_directories(engine PRIVATE ThirdParty/VulkanMemoryAllocator/include)
 target_include_directories(stb_usage PRIVATE ThirdPrty/stb)
+target_compile_definitions(${PROJECT_NAME} PUBLIC PROJECT_PATH="${CMAKE_SOURCE_DIR}")
 
 include_directories(src/)
 

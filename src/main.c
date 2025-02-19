@@ -186,6 +186,14 @@ int main() {
 			.metallic = 1,
 			.roughness = 0,
 			.refraction = 0,
+		},
+		{
+			.color = {1,1,0,2},
+			.isNormalPresent = false,
+			.isTexturePresent = false,
+			.metallic = 0,
+			.roughness = 1,
+			.refraction = 0
 		}
 	};
 	EngineLoadMaterials(engine_instance, material, ARR_SIZE(material));
@@ -214,7 +222,7 @@ int main() {
 		},
 		{
 			.materialID = 2,
-			.radius = 0.4,
+			.radius = 0.3,
 			.transformation = {
 				.translation = {0,-0.4,2.5},
 				.rotation = {0,0,0},
@@ -253,7 +261,7 @@ int main() {
 			.flags = ENGINE_ISACTIVE_FLAG | ENGINE_EXISTS_FLAG
 		},
 		{
-			.materialID = 0,
+			.materialID = 4,
 			.radius = 20,
 			.transformation = {
 				.translation = {0,0,-20},
@@ -275,8 +283,10 @@ int main() {
 			.lightData = {-1,-1,0,0.7},
 	};
 	EngineLoadSunlight(engine_instance, sunlight);
-
-	FILE *shader = fopen("C:/Users/akseg/Documents/Vulkan/src/shaders/raytrace.spv", "rb");
+	char shaderPath[] = "/src/shaders/raytrace.spv";
+	char path[sizeof(PROJECT_PATH) + sizeof(shaderPath)] = PROJECT_PATH;
+	strcat(path, shaderPath);
+	FILE *shader = fopen(path, "rb");
 	if(shader == NULL) {
 		printf("womp womp bad path\n");
 		exit(-1);
