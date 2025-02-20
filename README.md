@@ -1,10 +1,19 @@
 # MY VULKAN ENGINE
 It is fully raytraced. For now only software-based raytracing.
 
-use `git clone --recursive`!!
+## Prerequisites to be installed
+- VulkanSDK
+- CMake
+- C/C++ Compiler (Visual studio on windows, clang on MacOS/Linux)
 
+# Build Instructions
+1. Clone the repository with `git clone --recursive https://github.com/AppleItsme/VulkanRun.git`
+2. Go to the repo directory and run `cmake CMakeLists.txt`
+3. On linux/macOS, find `Makefile` and run `make`; On Windows, use Visual Studio to build the application.
 
-# Maths
+MacOS compatibility has not been tested. Currently it's only being developed on Windows, but it should also work on Linux systems.
+
+# Maths (from here on it's mostly my own personal notes)
 There are 2 spaces. Listing them in the order of transformations:
 1. **World/View space** represents the position of meshes in the world.
 2. **Screen space** represents the pixels that each mesh occupies
